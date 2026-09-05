@@ -33,7 +33,7 @@ case "PermissionRequest":
 case "PostToolUse":
     mapped = containsError(object["tool_response"])
         ? ("error", "A tool reported an error")
-        : ("working", "Continuing")
+        : ("working", "Processing the tool result")
 case "Stop":
     mapped = ("done", "Finished just now")
 case "SessionEnd":

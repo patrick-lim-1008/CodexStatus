@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Show specific live task activity directly in each task row, including terminal use, file edits, web search, integrations, subtasks, image generation, and response writing.
+- Derive activity from local Codex rollout events without exposing prompts, reasoning, commands, paths, or tool output.
+- Keep the task list compact with no redundant activity disclosure layer.
+
 ## 0.2.1
 
 - Split macOS notifications into independent Completed, Needs Attention, and Error rules.

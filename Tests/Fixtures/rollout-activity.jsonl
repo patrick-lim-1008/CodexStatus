@@ -1,0 +1,4 @@
+{"timestamp":"2026-09-05T01:00:00.000Z","type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-09-05T01:00:01.000Z","type":"response_item","payload":{"type":"reasoning","summary":"PRIVATE REASONING MUST NOT BE COPIED"}}
+{"timestamp":"2026-09-05T01:00:02.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","arguments":"SECRET COMMAND MUST NOT BE COPIED"}}
+{"timestamp":"2026-09-05T01:00:03.000Z","type":"event_msg","payload":{"type":"patch_apply_end","path":"PRIVATE PATH MUST NOT BE COPIED"}}

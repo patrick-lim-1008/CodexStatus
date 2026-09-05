@@ -9,6 +9,11 @@ struct AppPreferencesSmoke {
             print("Scanner output smoke test passed")
             return
         }
+        if CommandLine.arguments.contains("--validate-rollout-output") {
+            try validateRolloutOutput()
+            print("Rollout activity privacy smoke test passed")
+            return
+        }
 
         try testFreshInstallDefaults()
         try testLegacyMigration()
@@ -27,6 +32,21 @@ struct AppPreferencesSmoke {
         if let usageWindows = root["usageWindows"], !(usageWindows is [Any]) {
             throw TestFailure("usageWindows must be an array when present")
         }
+    }
+
+    private static func validateRolloutOutput() throws {
+        let data = FileHandle.standardInput.readDataToEndOfFile()
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["lifecycle"] as? String == "running",
+              root["activity"] as? String == "Editing files",
+              ((root["turnStartedAt"] as? NSNumber)?.doubleValue ?? 0) > 0
+        else {
+            throw TestFailure("Rollout parser must return sanitized activity and lifecycle")
+        }
+
+        let output = String(decoding: data, as: UTF8.self)
+        try expect(!output.contains("PRIVATE"), "Rollout output must not copy private content")
+        try expect(!output.contains("SECRET"), "Rollout output must not copy tool arguments")
     }
 
     @MainActor

@@ -42,6 +42,8 @@ All v0.2 extensions are built into and signed with the app. CodexStatus does not
 
 New Codex activity appears automatically. The app reads the persisted turn lifecycle, so a task remains blue throughout model thinking and tool work instead of guessing from its last-update time. A completed task remains green until it is acknowledged using the selected click or hover behavior; that acknowledgement is persisted across app restarts.
 
+While a task is active, its second line shows a privacy-safe activity category such as thinking, terminal use, file editing, web search, integration use, subtask coordination, image generation, or response writing. CodexStatus never copies prompts, reasoning text, commands, paths, or tool output into this display.
+
 Ordinary idle tasks are grouped into a collapsed row to keep the popover compact. Unread completed tasks remain visible until acknowledged, then join the idle group. The idle row can be expanded whenever older tasks are needed.
 
 Existing and older tasks are loaded from Codex's supported App Server `thread/list` interface, so they appear without waiting for a new hook event. Lifecycle hooks add approval and failure signals. Click any task row to open that exact conversation in Codex.

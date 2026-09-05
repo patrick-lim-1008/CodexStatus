@@ -303,7 +303,7 @@ struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "0.2.1"
+        return version ?? "0.2.2"
     }
 
     private static let repositoryURL = URL(string: "https://github.com/patrick-lim-1008/CodexStatus")!

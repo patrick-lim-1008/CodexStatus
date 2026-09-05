@@ -57,6 +57,8 @@ struct AgentTask: Identifiable, Equatable {
     var isRecentlyCompleted: Bool = false
     var projectName: String? = nil
     var completionAt: Date? = nil
+    var activityUpdatedAt: Date? = nil
+    var turnStartedAt: Date? = nil
 }
 
 private struct CodexSnapshot: Decodable {
@@ -76,6 +78,9 @@ private struct DiscoveredThread: Decodable {
     let activeFlags: [String]
     let lifecycle: String
     let lifecycleUpdatedAt: Double
+    let activity: String
+    let activityUpdatedAt: Double
+    let turnStartedAt: Double
 }
 
 struct UsageWindow: Decodable, Identifiable {
@@ -253,7 +258,8 @@ final class StatusModel: ObservableObject {
                 status: status,
                 updatedAt: snapshot.updatedAt,
                 isRecentlyCompleted: isRecentlyCompleted,
-                completionAt: completionAt
+                completionAt: completionAt,
+                activityUpdatedAt: snapshot.updatedAt
             )
         }
         .sorted { $0.updatedAt > $1.updatedAt }
@@ -280,6 +286,7 @@ final class StatusModel: ObservableObject {
             if task.status == .needsAttention || task.status == .error || task.status == discovered.status {
                 var enrichedTask = task
                 enrichedTask.projectName = discovered.projectName
+                enrichedTask.turnStartedAt = discovered.turnStartedAt
                 merged[task.id] = enrichedTask
             }
         }
@@ -463,7 +470,9 @@ final class StatusModel: ObservableObject {
                 completionAt = nil
             } else if row.statusType == "active" || row.lifecycle == "running" {
                 status = .working
-                detail = "Thinking or working"
+                detail = row.activity == "Activity unavailable"
+                    ? "Thinking or working"
+                    : row.activity
                 isRecentlyCompleted = false
                 completionAt = nil
             } else if row.lifecycle == "completed" {
@@ -514,7 +523,13 @@ final class StatusModel: ObservableObject {
                 updatedAt: updatedAt,
                 isRecentlyCompleted: isRecentlyCompleted,
                 projectName: projectName,
-                completionAt: completionAt
+                completionAt: completionAt,
+                activityUpdatedAt: row.activityUpdatedAt > 0
+                    ? Date(timeIntervalSince1970: row.activityUpdatedAt)
+                    : updatedAt,
+                turnStartedAt: row.turnStartedAt > 0
+                    ? Date(timeIntervalSince1970: row.turnStartedAt)
+                    : nil
             )
         }
     }

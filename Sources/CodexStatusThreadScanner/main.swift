@@ -9,6 +9,9 @@ struct ThreadSummary: Codable {
     let activeFlags: [String]
     let lifecycle: String
     let lifecycleUpdatedAt: Double
+    let activity: String
+    let activityUpdatedAt: Double
+    let turnStartedAt: Double
 }
 
 struct UsageWindow: Codable {
@@ -22,10 +25,25 @@ struct ScanResult: Codable {
     let usageWindows: [UsageWindow]?
 }
 
-private struct RolloutState {
+private struct RolloutState: Codable {
     let lifecycle: String
     let updatedAt: Double
+    let activity: String
+    let activityUpdatedAt: Double
+    let turnStartedAt: Double
 }
+
+private let fractionalTimestampFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+
+private let standardTimestampFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+}()
 
 private func rolloutStates(for threadIDs: Set<String>) -> [String: RolloutState] {
     guard !threadIDs.isEmpty else { return [:] }
@@ -40,21 +58,18 @@ private func rolloutStates(for threadIDs: Set<String>) -> [String: RolloutState]
     var result: [String: RolloutState] = [:]
     for case let url as URL in enumerator where url.pathExtension == "jsonl" {
         guard let threadID = threadIDs.first(where: { url.lastPathComponent.contains($0) }),
-              let state = latestLifecycle(in: url)
+              let state = latestRolloutState(in: url)
         else { continue }
         result[threadID] = state
     }
     return result
 }
 
-private func latestLifecycle(in url: URL) -> RolloutState? {
+private func latestRolloutState(in url: URL) -> RolloutState? {
     guard let handle = try? FileHandle(forReadingFrom: url),
           let fileSize = try? handle.seekToEnd()
     else { return nil }
     defer { try? handle.close() }
-
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
     var windowSize: UInt64 = min(fileSize, 256 * 1024)
     while windowSize > 0 {
@@ -65,30 +80,139 @@ private func latestLifecycle(in url: URL) -> RolloutState? {
             data.removeSubrange(...firstNewline)
         }
 
-        for line in data.split(separator: 0x0A).reversed() {
-            guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
-                  object["type"] as? String == "event_msg",
-                  let payload = object["payload"] as? [String: Any],
-                  let event = payload["type"] as? String,
-                  ["task_started", "task_complete", "turn_aborted"].contains(event)
-            else { continue }
-
-            let lifecycle: String
-            switch event {
-            case "task_started": lifecycle = "running"
-            case "task_complete": lifecycle = "completed"
-            default: lifecycle = "aborted"
-            }
-            let timestamp = (object["timestamp"] as? String)
-                .flatMap { formatter.date(from: $0) }?
-                .timeIntervalSince1970 ?? 0
-            return RolloutState(lifecycle: lifecycle, updatedAt: timestamp)
-        }
+        if let state = rolloutState(in: data), state.lifecycle != "unknown" { return state }
 
         if windowSize == fileSize { break }
         windowSize = min(fileSize, windowSize * 2)
     }
     return nil
+}
+
+private func rolloutState(in data: Data) -> RolloutState? {
+    var lifecycle = "unknown"
+    var lifecycleUpdatedAt = 0.0
+    var activity = "Activity unavailable"
+    var activityUpdatedAt = 0.0
+    var turnStartedAt = 0.0
+    var foundRecord = false
+
+    for line in data.split(separator: 0x0A) {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+              let recordType = object["type"] as? String,
+              let payload = object["payload"] as? [String: Any]
+        else { continue }
+
+        foundRecord = true
+        let timestamp = parsedTimestamp(object["timestamp"] as? String)
+
+        if recordType == "event_msg", let event = payload["type"] as? String {
+            switch event {
+            case "task_started":
+                lifecycle = "running"
+                lifecycleUpdatedAt = timestamp
+                turnStartedAt = timestamp
+            case "task_complete":
+                lifecycle = "completed"
+                lifecycleUpdatedAt = timestamp
+            case "turn_aborted":
+                lifecycle = "aborted"
+                lifecycleUpdatedAt = timestamp
+            default:
+                break
+            }
+        }
+
+        if let mappedActivity = sanitizedActivity(recordType: recordType, payload: payload) {
+            activity = mappedActivity
+            activityUpdatedAt = timestamp
+        }
+    }
+
+    guard foundRecord else { return nil }
+    return RolloutState(
+        lifecycle: lifecycle,
+        updatedAt: lifecycleUpdatedAt,
+        activity: activity,
+        activityUpdatedAt: activityUpdatedAt,
+        turnStartedAt: turnStartedAt
+    )
+}
+
+private func parsedTimestamp(_ value: String?) -> Double {
+    guard let value else { return 0 }
+    if let date = fractionalTimestampFormatter.date(from: value) {
+        return date.timeIntervalSince1970
+    }
+    return standardTimestampFormatter.date(from: value)?.timeIntervalSince1970 ?? 0
+}
+
+/// Maps private rollout records to a small, non-sensitive activity vocabulary.
+/// Commands, prompts, paths, arguments, tool results, and model reasoning are
+/// intentionally never copied into CodexStatus output.
+private func sanitizedActivity(recordType: String, payload: [String: Any]) -> String? {
+    let payloadType = payload["type"] as? String ?? ""
+
+    if recordType == "event_msg" {
+        switch payloadType {
+        case "task_started", "agent_reasoning": return "Thinking"
+        case "agent_message": return "Writing a response"
+        case "patch_apply_end": return "Editing files"
+        case "web_search_end": return "Searching the web"
+        case "mcp_tool_call_end": return "Using an integration"
+        case "sub_agent_activity": return "Coordinating subtasks"
+        case "image_generation_end": return "Generating an image"
+        case "task_complete": return "Completed"
+        case "turn_aborted": return "Stopped"
+        default: return nil
+        }
+    }
+
+    guard recordType == "response_item" else { return nil }
+    switch payloadType {
+    case "reasoning":
+        return "Thinking"
+    case "message":
+        return payload["role"] as? String == "assistant" ? "Writing a response" : nil
+    case "custom_tool_call", "function_call":
+        return sanitizedToolActivity(payload["name"] as? String ?? "")
+    default:
+        return nil
+    }
+}
+
+private func sanitizedToolActivity(_ name: String) -> String {
+    let normalized = name.lowercased()
+    if normalized == "exec" || normalized.contains("terminal") || normalized.contains("command") {
+        return "Using the terminal"
+    }
+    if normalized.contains("patch") || normalized.contains("file") {
+        return "Editing files"
+    }
+    if normalized.contains("web") || normalized.contains("browser") || normalized.contains("search") {
+        return "Searching the web"
+    }
+    if normalized.contains("image") {
+        return "Generating an image"
+    }
+    if normalized.contains("agent") || normalized.contains("thread") || normalized.contains("message") {
+        return "Coordinating subtasks"
+    }
+    if normalized.contains("wait") {
+        return "Waiting for a tool"
+    }
+    return "Using a tool"
+}
+
+if CommandLine.arguments.contains("--parse-rollout") {
+    let inputData = FileHandle.standardInput.readDataToEndOfFile()
+    if let state = rolloutState(in: inputData),
+       let data = try? JSONEncoder().encode(state) {
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+        exit(0)
+    }
+    FileHandle.standardOutput.write(Data("{}\n".utf8))
+    exit(1)
 }
 
 let environment = ProcessInfo.processInfo.environment
@@ -177,7 +301,10 @@ output.fileHandleForReading.readabilityHandler = { handle in
                     statusType: (status["type"] as? String) ?? "notLoaded",
                     activeFlags: status["activeFlags"] as? [String] ?? [],
                     lifecycle: lifecycle?.lifecycle ?? "unknown",
-                    lifecycleUpdatedAt: lifecycle?.updatedAt ?? 0
+                    lifecycleUpdatedAt: lifecycle?.updatedAt ?? 0,
+                    activity: lifecycle?.activity ?? "Activity unavailable",
+                    activityUpdatedAt: lifecycle?.activityUpdatedAt ?? 0,
+                    turnStartedAt: lifecycle?.turnStartedAt ?? 0
                 )
             }
             receivedThreads = true
@@ -202,7 +329,7 @@ do {
     try server.run()
     var messages = [
         ["method": "initialize", "id": 0, "params": [
-            "clientInfo": ["name": "codex_status", "title": "CodexStatus", "version": "0.2.1"]
+            "clientInfo": ["name": "codex_status", "title": "CodexStatus", "version": "0.2.2"]
         ]],
         ["method": "initialized", "params": [:]],
         ["method": "thread/list", "id": 1, "params": ["limit": 20, "sortKey": "updated_at"]]
