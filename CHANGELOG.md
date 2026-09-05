@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+## 0.3.2
+
 - Add declarative plugin permissions with an up-front review during import, first enable, or migration from an already-enabled older plugin.
 - Keep a plugin completely disabled when any required system authorization is denied, and prevent registry callers from bypassing preflight.
 - Invalidate approval when a plugin adds or changes a permission declaration while preserving approval across ordinary disable/enable cycles.
 - Reject unknown, duplicate, mismatched, or malformed permission requests before installing a plugin.
+- Replace the settings split-view chrome with an opaque native macOS window layout so content no longer shows through the title bar.
+- Keep the sidebar control in a stable leading toolbar position whether the sidebar is open or closed, with its state persisted across launches.
 
 ## 0.3.1
 
