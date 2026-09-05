@@ -35,7 +35,7 @@ CodexStatus separates features by how essential they are and what they affect:
 
 Appearance settings control theme, project labels, menu-bar counts, multi-state color cycling, and idle folding. General settings control completion acknowledgement. Lifecycle following is grouped with the other built-in optional features.
 
-Update checks are disabled by default. When enabled, CodexStatus checks the public GitHub `releases/latest` endpoint at launch and every six hours, ignores drafts and prereleases, and shows a small update action only when a newer stable version exists. This checks CodexStatus itself; summaries of changes in the Codex app remain a separate planned plugin.
+Update checks are disabled by default. When enabled, CodexStatus checks the public GitHub `releases/latest` endpoint at launch and every six hours and ignores drafts and prereleases. The update control downloads the matching ZIP directly to Downloads, verifies its archive signature, byte size, and GitHub SHA-256 digest when available, then changes into a Finder reveal action. It does not redirect the primary action to GitHub. This checks CodexStatus itself; summaries of changes in the Codex app remain a separate planned plugin.
 
 Existing v0.1 installations retain their enabled hooks, lifecycle behavior, and hover-to-read interaction when upgraded. Fresh installations use click-to-read and do not install hooks or a background watcher unless those options are enabled.
 
@@ -62,6 +62,8 @@ The compact 224-point header reads `Codex · activity · refresh` on the left. C
 A completed task remains green until it is seen. It becomes a neutral `Completed · viewed` row, remains visible, and the acknowledgement is persisted. New installations mark it read when the task is clicked; upgraded users retain the original hover-to-read behavior, and either mode can be selected in Settings.
 
 When **Follow Codex lifecycle** is enabled, CodexStatus installs a lightweight user LaunchAgent watcher. The watcher has no UI and only observes whether the Codex app bundle is running: it opens CodexStatus when Codex starts and terminates CodexStatus when Codex quits. Disabling the setting removes that watcher.
+
+CodexStatus holds one user-scoped instance lock. If the lifecycle watcher, Finder, or a copied development build tries to launch a second copy, that copy activates the existing instance and exits before creating another menu-bar item.
 
 ## Privacy
 

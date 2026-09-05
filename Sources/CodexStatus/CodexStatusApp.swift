@@ -15,12 +15,14 @@ struct CodexStatusApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+    private static let activationNotification = Notification.Name("com.local.CodexStatus.activate")
+    private let instanceGuard: SingleInstanceGuard
     private let preferences: AppPreferences
     private let pluginRegistry: PluginRegistry
     private let model: StatusModel
     private let updateChecker: AppUpdateChecker
     private let lifecycleController: LifecycleController
-    private let statusItem = NSStatusBar.system.statusItem(withLength: 34)
+    private lazy var statusItem = NSStatusBar.system.statusItem(withLength: 34)
     private let popover = NSPopover()
     private var modelObserver: AnyCancellable?
     private var preferenceObservers = Set<AnyCancellable>()
@@ -44,6 +46,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     )
 
     override init() {
+        let instanceGuard = SingleInstanceGuard()
+        self.instanceGuard = instanceGuard
+        _ = instanceGuard.acquire()
         let existingHooksInstalled = CodexIntegrationInstaller().isInstalled
         let existingLifecycleInstalled = CodexLifecycleInstaller().isInstalled
         let preferences = AppPreferences(
@@ -59,7 +64,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard instanceGuard.ownsLock else {
+            requestActivationOfExistingInstance()
+            NSApplication.shared.terminate(nil)
+            return
+        }
         NSApplication.shared.setActivationPolicy(.accessory)
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleActivationRequest(_:)),
+            name: Self.activationNotification,
+            object: nil
+        )
 
         popover.behavior = .transient
         popover.animates = true
@@ -102,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        DistributedNotificationCenter.default().removeObserver(self)
         statusCycleTimer?.invalidate()
         updateChecker.setEnabled(false)
     }
@@ -130,6 +147,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    private func requestActivationOfExistingInstance() {
+        let wantsSettings = CommandLine.arguments.contains("--settings")
+        DistributedNotificationCenter.default().postNotificationName(
+            Self.activationNotification,
+            object: nil,
+            userInfo: ["settings": wantsSettings],
+            deliverImmediately: true
+        )
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        NSRunningApplication.runningApplications(
+            withBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.local.CodexStatus"
+        )
+        .first { $0.processIdentifier != ownPID }?
+        .activate(options: [.activateIgnoringOtherApps])
+    }
+
+    @objc private func handleActivationRequest(_ notification: Notification) {
+        if notification.userInfo?["settings"] as? Bool == true {
+            openSettings()
+        } else {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+    }
+
     func popoverDidClose(_ notification: Notification) {
         model.showsIdleTasks = false
         updatePopoverSize()
@@ -139,19 +180,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard let button = statusItem.button else { return }
         updatePopoverSize()
         let status = displayedStatus
+        let reservesCountSlot = MenuBarLayoutPolicy.reservesCountSlot(
+            showCounts: preferences.showMenuBarCount,
+            displayedStatusCounts: statusesDisplayedInCycle.map { cycleStatus in
+                guard cycleStatus != .idle else { return 0 }
+                return model.tasks.filter { $0.status == cycleStatus }.count
+            }
+        )
         let count = preferences.showMenuBarCount
             ? model.tasks.filter { $0.status == status }.count
             : 0
-        button.image = statusImage(status: status, count: count)
+        statusItem.length = reservesCountSlot ? 34 : 22
+        button.image = statusImage(
+            status: status,
+            count: count,
+            reservesCountSlot: reservesCountSlot
+        )
         button.toolTip = model.summaryAccessibilityLabel
         button.setAccessibilityLabel(model.summaryAccessibilityLabel)
     }
 
     private var displayedStatus: AgentStatus {
-        guard preferences.cycleStatusColors else { return model.summaryStatus }
+        let statuses = statusesDisplayedInCycle
+        return statuses[statusCycleIndex % statuses.count]
+    }
+
+    private var statusesDisplayedInCycle: [AgentStatus] {
+        guard preferences.cycleStatusColors else { return [model.summaryStatus] }
         let activeStatuses = model.activeStatuses
-        guard !activeStatuses.isEmpty else { return .idle }
-        return activeStatuses[statusCycleIndex % activeStatuses.count]
+        return activeStatuses.isEmpty ? [.idle] : activeStatuses
     }
 
     private func advanceStatusCycle() {
@@ -287,7 +344,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         false
     }
 
-    private func statusImage(status: AgentStatus, count: Int) -> NSImage {
+    private func statusImage(
+        status: AgentStatus,
+        count: Int,
+        reservesCountSlot: Bool
+    ) -> NSImage {
         let countText = status != .idle && count > 1 ? "\(count)" : ""
         let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         let attributes: [NSAttributedString.Key: Any] = [
@@ -295,11 +356,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             .foregroundColor: NSColor.labelColor
         ]
         let textWidth = countText.isEmpty ? 0 : ceil((countText as NSString).size(withAttributes: attributes).width)
-        // Keep a fixed image and status-item width. NSStatusBarButton centers its
-        // image, so a variable-width count would otherwise make the logo drift.
-        let size = NSSize(width: 34, height: 18)
+        // Reserve the count slot for the entire color cycle whenever any state
+        // needs it. This keeps the mark fixed while cycling, yet returns to a
+        // compact status item when no displayed state can show a number.
+        let size = NSSize(width: reservesCountSlot ? 34 : 22, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in
-            self.drawCodexMark(in: NSRect(x: 18.5, y: 1.5, width: 15, height: 15), color: status.nsColor)
+            let markX: CGFloat = reservesCountSlot ? 18.5 : 3.5
+            self.drawCodexMark(in: NSRect(x: markX, y: 1.5, width: 15, height: 15), color: status.nsColor)
 
             if !countText.isEmpty {
                 let textSize = (countText as NSString).size(withAttributes: attributes)

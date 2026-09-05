@@ -104,7 +104,7 @@ final class PluginRegistry: ObservableObject {
             ?? Bundle.main.bundleURL
                 .appendingPathComponent("Contents/Resources/Plugins", isDirectory: true)
         let hostVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "0.2.2"
+            ?? "0.3.0"
         self.init(
             bundledRoot: bundledRoot,
             installedRoot: installedRoot,
@@ -378,6 +378,7 @@ enum PluginCapabilityLabels {
         "createEphemeralSideConversation": "Creates temporary side conversations",
         "useModelQuota": "Uses Codex model quota",
         "providePrompts": "Provides prompt presets",
+        "writeClipboard": "Writes the selected preset to the clipboard",
         "provideThemes": "Provides appearance themes",
         "providePetAssets": "Provides pet artwork"
     ]

@@ -111,6 +111,32 @@ struct StatusPopover: View {
                     .disabled(model.progressSidecar.requestingTaskIDs.contains(task.id))
                     .help("Ask for progress without interrupting this task")
                 }
+
+                if preferences.promptLibraryEnabled, !model.promptLibrary.presets.isEmpty {
+                    Menu {
+                        ForEach(model.promptLibrary.presets) { preset in
+                            Button {
+                                copyPrompt(preset, for: task)
+                            } label: {
+                                VStack(alignment: .leading) {
+                                    Text(preset.title)
+                                    Text(preset.sourceName)
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: viewState.copiedPromptTaskID == task.id
+                            ? "checkmark"
+                            : "text.badge.plus")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(viewState.copiedPromptTaskID == task.id ? .green : .secondary)
+                            .frame(width: 20, height: 28)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Choose a prompt, copy it, and open this task")
+                }
             }
             .contextMenu {
                 if preferences.progressSidecarEnabled {
@@ -129,6 +155,15 @@ struct StatusPopover: View {
                     }
                 } else {
                     Button("Enable Progress Sidecar…", action: onOpenSettings)
+                }
+                if preferences.promptLibraryEnabled, !model.promptLibrary.presets.isEmpty {
+                    Menu("Copy Prompt & Open Task") {
+                        ForEach(model.promptLibrary.presets) { preset in
+                            Button(preset.title) {
+                                copyPrompt(preset, for: task)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -172,6 +207,18 @@ struct StatusPopover: View {
         model.progressSidecar.requestProgress(for: task) { result in
             if case .failure(let error) = result {
                 viewState.progressAlert = .failure(error.localizedDescription)
+            }
+        }
+    }
+
+    private func copyPrompt(_ preset: PromptPreset, for task: AgentTask) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(preset.composedText, forType: .string)
+        viewState.copiedPromptTaskID = task.id
+        model.openThread(task.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if viewState.copiedPromptTaskID == task.id {
+                viewState.copiedPromptTaskID = nil
             }
         }
     }
@@ -238,16 +285,7 @@ struct StatusPopover: View {
             .buttonStyle(.plain)
             .help("Open CodexStatus Settings")
 
-            if let update = updateChecker.state.availableUpdate {
-                Link(destination: update.releaseURL) {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.orange)
-                        .frame(width: 13, height: 16)
-                }
-                .buttonStyle(.plain)
-                .help("CodexStatus \(update.version) is available")
-            }
+            updateAction
 
             Spacer(minLength: 3)
             if preferences.usageEnabled {
@@ -286,6 +324,41 @@ struct StatusPopover: View {
         let noun = model.summaryCount == 1 ? "task" : "tasks"
         return "\(model.summaryCount) \(noun) · \(model.summaryStatus.title)"
     }
+
+    @ViewBuilder
+    private var updateAction: some View {
+        switch updateChecker.state {
+        case .available(let update, _), .downloadFailed(let update, _):
+            Button {
+                updateChecker.downloadAvailableUpdate()
+            } label: {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 13, height: 16)
+            }
+            .buttonStyle(.plain)
+            .help("Download CodexStatus \(update.version)")
+        case .downloading:
+            ProgressView()
+                .controlSize(.mini)
+                .frame(width: 13, height: 16)
+                .help("Downloading CodexStatus update")
+        case .downloaded(let result, _):
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([result.fileURL])
+            } label: {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.green)
+                    .frame(width: 13, height: 16)
+            }
+            .buttonStyle(.plain)
+            .help("Show CodexStatus \(result.update.version) in Downloads")
+        default:
+            EmptyView()
+        }
+    }
 }
 
 private enum ProgressAlert: Identifiable {
@@ -303,6 +376,7 @@ private enum ProgressAlert: Identifiable {
 @MainActor
 private final class StatusPopoverViewState: ObservableObject {
     @Published var progressAlert: ProgressAlert?
+    @Published var copiedPromptTaskID: String?
 }
 
 private struct ProgressSnapshotView: View {

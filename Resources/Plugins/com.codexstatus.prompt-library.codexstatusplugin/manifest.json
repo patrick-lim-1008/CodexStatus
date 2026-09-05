@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "identifier": "com.codexstatus.prompt-library",
+  "name": "Prompt & Constraint Library",
+  "version": "0.1.0",
+  "minimumHostVersion": "0.3.0",
+  "author": "CodexStatus",
+  "summary": "Stores reusable prompts and task constraints in a compact task-row picker.",
+  "symbolName": "text.badge.plus",
+  "kind": "resourcePack",
+  "capabilities": ["providePrompts", "writeClipboard", "openCodexTasks"],
+  "privacyDescription": "Stores custom presets locally. Selecting a preset copies it to the clipboard and opens the chosen task; CodexStatus never sends it automatically."
+}

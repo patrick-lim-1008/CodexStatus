@@ -115,6 +115,7 @@ final class StatusModel: ObservableObject {
     @Published private(set) var usageWindows: [UsageWindow] = []
     @Published private(set) var usageUpdatedAt: Date?
     let progressSidecar: ProgressSidecarPlugin
+    let promptLibrary: PromptLibraryPlugin
 
     private let installer = CodexIntegrationInstaller()
     private let preferences: AppPreferences
@@ -138,9 +139,16 @@ final class StatusModel: ObservableObject {
             preferences: preferences,
             packageURL: sidecarPackageURL
         )
+        promptLibrary = PromptLibraryPlugin(
+            preferences: preferences,
+            registry: pluginRegistry
+        )
         completionLedger = CompletionLedger()
 
         progressSidecar.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &preferenceObservers)
+        promptLibrary.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &preferenceObservers)
 

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "presets": [
+    {
+      "id": "implement-carefully",
+      "title": "Implement Carefully",
+      "prompt": "Implement the requested change and verify the result locally before handing it back.",
+      "constraints": "Preserve unrelated changes. Keep the implementation small and native to the existing architecture. Do not publish or deploy unless explicitly requested."
+    },
+    {
+      "id": "diagnose-only",
+      "title": "Diagnose Only",
+      "prompt": "Investigate the reported problem and explain the most likely root cause with concrete evidence.",
+      "constraints": "Do not modify files or external state. Clearly separate confirmed facts from hypotheses."
+    },
+    {
+      "id": "review-changes",
+      "title": "Review Current Changes",
+      "prompt": "Review the current changes for correctness, regressions, security issues, and missing tests.",
+      "constraints": "Prioritize actionable findings. Do not make changes unless asked after the review."
+    }
+  ]
+}

@@ -40,6 +40,42 @@ swiftc \
     -o "$test_build_dir/PluginSystemSmoke"
 "$test_build_dir/PluginSystemSmoke"
 
+swiftc \
+    -parse-as-library \
+    -sdk "$sdk_path" \
+    -target arm64-apple-macosx13.0 \
+    -module-cache-path "$test_build_dir/module-cache" \
+    -interface-compiler-version "$sdk_compiler_version" \
+    Sources/CodexStatus/AppPreferences.swift \
+    Sources/CodexStatus/PluginSystem.swift \
+    Sources/CodexStatus/PromptLibraryPlugin.swift \
+    Sources/CodexStatus/PromptLibrarySupport.swift \
+    Tests/PromptLibrarySmoke.swift \
+    -o "$test_build_dir/PromptLibrarySmoke"
+"$test_build_dir/PromptLibrarySmoke"
+
+swiftc \
+    -parse-as-library \
+    -sdk "$sdk_path" \
+    -target arm64-apple-macosx13.0 \
+    -module-cache-path "$test_build_dir/module-cache" \
+    -interface-compiler-version "$sdk_compiler_version" \
+    Sources/CodexStatus/SingleInstanceGuard.swift \
+    Tests/SingleInstanceSmoke.swift \
+    -o "$test_build_dir/SingleInstanceSmoke"
+"$test_build_dir/SingleInstanceSmoke"
+
+swiftc \
+    -parse-as-library \
+    -sdk "$sdk_path" \
+    -target arm64-apple-macosx13.0 \
+    -module-cache-path "$test_build_dir/module-cache" \
+    -interface-compiler-version "$sdk_compiler_version" \
+    Sources/CodexStatus/MenuBarLayoutSupport.swift \
+    Tests/MenuBarLayoutSmoke.swift \
+    -o "$test_build_dir/MenuBarLayoutSmoke"
+"$test_build_dir/MenuBarLayoutSmoke"
+
 if [[ "${CODEX_STATUS_RUN_NETWORK_TESTS:-0}" == "1" ]]; then
     swiftc \
         -parse-as-library \
@@ -56,13 +92,13 @@ fi
 codesign --verify --deep --strict "$app_dir"
 
 plugin_count=$(find "$app_dir/Contents/Resources/Plugins" -name manifest.json -maxdepth 2 | wc -l | tr -d ' ')
-[[ "$plugin_count" == "1" ]] || { print -u2 "Expected 1 bundled plugin manifest, found $plugin_count"; exit 1; }
+[[ "$plugin_count" == "2" ]] || { print -u2 "Expected 2 bundled plugin manifests, found $plugin_count"; exit 1; }
 
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_dir/Contents/Info.plist")
 build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_dir/Contents/Info.plist")
 ui_element=$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$app_dir/Contents/Info.plist")
-[[ "$version" == "0.3.0" ]] || { print -u2 "Unexpected version: $version"; exit 1; }
-[[ "$build" == "7" ]] || { print -u2 "Unexpected build: $build"; exit 1; }
+[[ "$version" == "0.3.1" ]] || { print -u2 "Unexpected version: $version"; exit 1; }
+[[ "$build" == "8" ]] || { print -u2 "Unexpected build: $build"; exit 1; }
 [[ "$ui_element" == "true" ]] || { print -u2 "App must remain menu-bar only"; exit 1; }
 
 for executable in \

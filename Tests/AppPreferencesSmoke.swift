@@ -137,6 +137,7 @@ struct AppPreferencesSmoke {
             try expect(preferences.progressSidecarPrompt == AppPreferences.defaultProgressSidecarPrompt, "Progress Sidecar should use the safe default prompt")
             try expect(!preferences.progressSidecarWarningAcknowledged, "The quota warning must be shown before first use")
             try expect(preferences.progressRefreshInterval == .manual, "Automatic progress updates must default to off")
+            try expect(!preferences.promptLibraryEnabled, "Prompt Library must be opt-in")
         }
     }
 
@@ -179,6 +180,7 @@ struct AppPreferencesSmoke {
             first.progressSidecarPrompt = "Stored sidecar prompt"
             first.progressSidecarWarningAcknowledged = true
             first.progressRefreshInterval = .threeMinutes
+            first.promptLibraryEnabled = true
 
             let restored = AppPreferences(
                 defaults: defaults,
@@ -202,6 +204,7 @@ struct AppPreferencesSmoke {
             try expect(restored.progressSidecarPrompt == "Stored sidecar prompt", "Stored sidecar prompt must win")
             try expect(restored.progressSidecarWarningAcknowledged, "Stored sidecar warning choice must win")
             try expect(restored.progressRefreshInterval == .threeMinutes, "Stored progress interval must win")
+            try expect(restored.promptLibraryEnabled, "Stored Prompt Library setting must survive restart")
         }
     }
 
@@ -397,11 +400,19 @@ struct AppPreferencesSmoke {
           "name": "CodexStatus 0.4",
           "html_url": "https://github.com/patrick-lim-1008/CodexStatus/releases/tag/v0.4.0",
           "draft": false,
-          "prerelease": false
+          "prerelease": false,
+          "assets": [{
+            "name": "CodexStatus-v0.4.0.zip",
+            "browser_download_url": "https://github.com/patrick-lim-1008/CodexStatus/releases/download/v0.4.0/CodexStatus-v0.4.0.zip",
+            "size": 4,
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }]
         }
         """#.utf8)
         let update = try AppUpdateChecker.availableUpdate(from: stable, currentVersion: "0.3.0")
         try expect(update?.version == "0.4.0", "A newer stable release must be detected")
+        try expect(update?.downloadAsset?.fileName == "CodexStatus-v0.4.0.zip", "The matching release archive must be selected")
+        try expect(update?.downloadAsset?.sha256 == String(repeating: "a", count: 64), "The GitHub SHA-256 digest must be normalized")
         let current = try AppUpdateChecker.availableUpdate(from: stable, currentVersion: "0.4.0")
         try expect(
             current == nil,
@@ -425,6 +436,34 @@ struct AppPreferencesSmoke {
             ignoredPrerelease == nil,
             "Prereleases must not be offered by stable update checks"
         )
+
+        let archiveURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexStatus-update-\(UUID().uuidString).zip")
+        defer { try? FileManager.default.removeItem(at: archiveURL) }
+        try Data([0x50, 0x4B, 0x03, 0x04]).write(to: archiveURL)
+        try AppUpdateChecker.validateDownloadedArchive(
+            at: archiveURL,
+            asset: AppUpdateAsset(
+                fileName: "CodexStatus-v0.4.0.zip",
+                downloadURL: URL(string: "https://example.com/CodexStatus.zip")!,
+                size: 4,
+                sha256: nil
+            )
+        )
+        do {
+            try AppUpdateChecker.validateDownloadedArchive(
+                at: archiveURL,
+                asset: AppUpdateAsset(
+                    fileName: "CodexStatus-v0.4.0.zip",
+                    downloadURL: URL(string: "https://example.com/CodexStatus.zip")!,
+                    size: 5,
+                    sha256: nil
+                )
+            )
+            throw TestFailure("An update with the wrong byte size was accepted")
+        } catch AppUpdateDownloadError.sizeMismatch {
+            // Expected.
+        }
     }
 
     private static func testLifecycleInstallerRoundTrip() throws {

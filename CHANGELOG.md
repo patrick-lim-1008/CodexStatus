@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add a local Prompt & Constraint Library plugin prototype with editable personal presets and safe imported prompt packs.
+- Add a compact task-row picker that copies the selected preset and opens the corresponding Codex task without injecting messages automatically.
+- Prevent copied builds and the lifecycle watcher from creating duplicate menu-bar instances.
+- Download update archives directly to Downloads, validate their ZIP signature, size, and GitHub checksum, then reveal the verified file in Finder.
+- Collapse the menu-bar item to a narrow icon when no displayed status needs a count, while reserving the count slot across an entire multi-status color cycle when any state is numbered.
+
 ## 0.3.0
 
 - Add PluginKit v1 with versioned `.codexstatusplugin` manifests, capability and privacy declarations, and a native settings importer.

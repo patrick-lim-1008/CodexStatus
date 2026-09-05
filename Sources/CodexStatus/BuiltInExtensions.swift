@@ -2,6 +2,7 @@ import Foundation
 
 enum BuiltInPluginIdentifiers {
     static let progressSidecar = "com.codexstatus.progress-sidecar"
+    static let promptLibrary = "com.codexstatus.prompt-library"
 }
 
 struct BuiltInFeatureDescriptor {
@@ -76,7 +77,7 @@ enum BuiltInPluginFallbacks {
         identifier: BuiltInPluginIdentifiers.progressSidecar,
         name: "Progress Sidecar",
         version: "1.0.0",
-        minimumHostVersion: "0.2.2",
+        minimumHostVersion: "0.3.0",
         author: "CodexStatus",
         summary: "Shows concise progress through a temporary /side-style conversation.",
         symbolName: "sidebar.right",
@@ -84,5 +85,20 @@ enum BuiltInPluginFallbacks {
         entryPoint: "progress-sidecar",
         capabilities: ["readTaskActivity", "createEphemeralSideConversation", "useModelQuota"],
         privacyDescription: "Creates an ephemeral, read-only fork of the selected task. The summary stays in CodexStatus and does not enter the source conversation. Each refresh uses account quota."
+    )
+
+    static let promptLibrary = PluginManifest(
+        schemaVersion: 1,
+        identifier: BuiltInPluginIdentifiers.promptLibrary,
+        name: "Prompt & Constraint Library",
+        version: "0.1.0",
+        minimumHostVersion: "0.3.0",
+        author: "CodexStatus",
+        summary: "Stores reusable prompts and task constraints in a compact task-row picker.",
+        symbolName: "text.badge.plus",
+        kind: .resourcePack,
+        entryPoint: nil,
+        capabilities: ["providePrompts", "writeClipboard", "openCodexTasks"],
+        privacyDescription: "Stores custom presets locally. Selecting a preset copies it to the clipboard and opens the chosen task; CodexStatus never sends it automatically."
     )
 }

@@ -121,6 +121,7 @@ final class AppPreferences: ObservableObject {
         static let progressSidecarPrompt = "extensions.progressSidecar.prompt"
         static let progressSidecarWarningAcknowledged = "extensions.progressSidecar.warningAcknowledged"
         static let progressRefreshInterval = "extensions.progressSidecar.refreshInterval"
+        static let promptLibraryEnabled = "extensions.promptLibrary.enabled"
         static let legacyTaskCheckInsEnabled = "extensions.taskCheckIns.enabled"
     }
 
@@ -220,6 +221,10 @@ final class AppPreferences: ObservableObject {
 
     @Published var progressRefreshInterval: ProgressRefreshInterval {
         didSet { defaults.set(progressRefreshInterval.rawValue, forKey: Key.progressRefreshInterval) }
+    }
+
+    @Published var promptLibraryEnabled: Bool {
+        didSet { defaults.set(promptLibraryEnabled, forKey: Key.promptLibraryEnabled) }
     }
 
     /// Creates preferences while safely migrating users of the original release.
@@ -359,6 +364,11 @@ final class AppPreferences: ObservableObject {
             .flatMap { ($0 as? NSNumber)?.intValue }
             .flatMap(ProgressRefreshInterval.init(rawValue:))
             ?? .manual
+        promptLibraryEnabled = Self.storedBool(
+            in: defaults,
+            forKey: Key.promptLibraryEnabled,
+            fallback: false
+        )
 
         persistInitialValues()
     }
@@ -418,5 +428,6 @@ final class AppPreferences: ObservableObject {
         defaults.set(progressSidecarPrompt, forKey: Key.progressSidecarPrompt)
         defaults.set(progressSidecarWarningAcknowledged, forKey: Key.progressSidecarWarningAcknowledged)
         defaults.set(progressRefreshInterval.rawValue, forKey: Key.progressRefreshInterval)
+        defaults.set(promptLibraryEnabled, forKey: Key.promptLibraryEnabled)
     }
 }

@@ -86,6 +86,10 @@ struct SettingsView: View {
                 )
             }
         }
+        .sheet(isPresented: $viewState.isShowingPromptLibrary) {
+            PromptLibraryEditor(library: model.promptLibrary)
+                .preferredColorScheme(preferences.appTheme.colorScheme)
+        }
         .preferredColorScheme(preferences.appTheme.colorScheme)
     }
 
@@ -269,12 +273,9 @@ struct SettingsView: View {
                                 updateChecker.checkNow()
                             }
                             .controlSize(.small)
-                            .disabled(updateChecker.state == .checking)
+                            .disabled(updateChecker.state.isBusy)
 
-                            if let update = updateChecker.state.availableUpdate {
-                                Link("View \(update.version)", destination: update.releaseURL)
-                                    .font(.caption)
-                            }
+                            updateDownloadControl
                             Spacer()
                         }
                         .padding(.leading, 38)
@@ -326,6 +327,36 @@ struct SettingsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 10) {
+                    PluginRow(
+                        descriptor: manifest(
+                            BuiltInPluginIdentifiers.promptLibrary,
+                            fallback: BuiltInPluginFallbacks.promptLibrary
+                        ),
+                        source: .bundled,
+                        isOn: $preferences.promptLibraryEnabled,
+                        statusText: model.promptLibrary.statusText
+                    )
+
+                    if preferences.promptLibraryEnabled {
+                        HStack(spacing: 9) {
+                            Button("Manage Presets…") {
+                                viewState.isShowingPromptLibrary = true
+                            }
+                            .controlSize(.small)
+                            if let warning = model.promptLibrary.loadWarnings.first {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                    .help(warning)
+                            }
+                            Spacer()
+                        }
+                        .padding(.leading, 38)
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
                     Text("Imported Resource Packs")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -353,6 +384,37 @@ struct SettingsView: View {
 
     private func manifest(_ identifier: String, fallback: PluginManifest) -> PluginManifest {
         pluginRegistry.plugin(identifier: identifier)?.manifest ?? fallback
+    }
+
+    @ViewBuilder
+    private var updateDownloadControl: some View {
+        switch updateChecker.state {
+        case .available(let update, _):
+            Button("Download \(update.version)") {
+                updateChecker.downloadAvailableUpdate()
+            }
+            .controlSize(.small)
+            .disabled(update.downloadAsset == nil)
+        case .downloading(let update):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Downloading \(update.version)…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .downloaded(let result, _):
+            Button("Show \(result.update.version) in Downloads") {
+                NSWorkspace.shared.activateFileViewerSelecting([result.fileURL])
+            }
+            .controlSize(.small)
+        case .downloadFailed(let update, _):
+            Button("Retry \(update.version)") {
+                updateChecker.downloadAvailableUpdate()
+            }
+            .controlSize(.small)
+        default:
+            EmptyView()
+        }
     }
 
     private func importedPluginBinding(_ identifier: String) -> Binding<Bool> {
@@ -580,7 +642,7 @@ struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "0.3.0"
+        return version ?? "0.3.1"
     }
 
     private static let repositoryURL = URL(string: "https://github.com/patrick-lim-1008/CodexStatus")!
@@ -590,6 +652,7 @@ struct SettingsView: View {
 private final class SettingsViewState: ObservableObject {
     @Published var selectedPane: SettingsPane? = .extensions
     @Published var isConfirmingIntegrationRemoval = false
+    @Published var isShowingPromptLibrary = false
     @Published var pluginAlert: PluginAlert?
 }
 
@@ -834,4 +897,181 @@ private struct ExtensionPresentationRow: View {
         }
         .help(privacyDescription)
     }
+}
+
+private struct PromptLibraryEditor: View {
+    @ObservedObject var library: PromptLibraryPlugin
+    @ObservedObject private var editorState: PromptLibraryEditorState
+    @Environment(\.dismiss) private var dismiss
+
+    init(library: PromptLibraryPlugin) {
+        self.library = library
+        editorState = PromptLibraryEditorState()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Prompt & Constraint Library")
+                        .font(.headline)
+                    Text("Choose a preset from a task row; CodexStatus copies it and opens that task.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done", action: dismiss.callAsFunction)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(16)
+
+            Divider()
+
+            HStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(library.presets) { preset in
+                                Button {
+                                    load(preset)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(preset.title)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .lineLimit(1)
+                                        Text(preset.sourceName)
+                                            .font(.system(size: 9))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        editorState.selectedPresetID == preset.id ? Color.accentColor.opacity(0.14) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 6)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(8)
+                    }
+                    Button {
+                        beginNewPreset()
+                    } label: {
+                        Label("New Preset", systemImage: "plus")
+                    }
+                    .controlSize(.small)
+                    .padding(.bottom, 10)
+                }
+                .frame(width: 190)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Preset name", text: $editorState.title)
+                        .textFieldStyle(.roundedBorder)
+
+                    Text("Prompt")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $editorState.prompt)
+                        .font(.system(size: 12))
+                        .frame(minHeight: 105)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        }
+
+                    Text("Constraints")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $editorState.constraints)
+                        .font(.system(size: 12))
+                        .frame(minHeight: 85)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        }
+
+                    if let validationMessage = editorState.validationMessage {
+                        Text(validationMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    HStack {
+                        if let editingCustomID = editorState.editingCustomID {
+                            Button("Delete", role: .destructive) {
+                                library.removeCustomPreset(id: editingCustomID)
+                                beginNewPreset()
+                            }
+                        }
+                        Spacer()
+                        Button(editorState.editingCustomID == nil ? "Save as My Preset" : "Save") {
+                            save()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(editorState.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || editorState.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+        .frame(width: 650, height: 470)
+        .onAppear {
+            if let first = library.presets.first { load(first) } else { beginNewPreset() }
+        }
+    }
+
+    private func load(_ preset: PromptPreset) {
+        editorState.selectedPresetID = preset.id
+        editorState.editingCustomID = preset.isEditable ? preset.payload.id : nil
+        editorState.draftID = preset.isEditable ? preset.payload.id : UUID().uuidString
+        editorState.title = preset.payload.title
+        editorState.prompt = preset.payload.prompt
+        editorState.constraints = preset.payload.constraints
+        editorState.validationMessage = nil
+    }
+
+    private func beginNewPreset() {
+        editorState.selectedPresetID = nil
+        editorState.editingCustomID = nil
+        editorState.draftID = UUID().uuidString
+        editorState.title = ""
+        editorState.prompt = ""
+        editorState.constraints = ""
+        editorState.validationMessage = nil
+    }
+
+    private func save() {
+        let preset = PromptPresetPayload(
+            id: editorState.editingCustomID ?? editorState.draftID,
+            title: editorState.title.trimmingCharacters(in: .whitespacesAndNewlines),
+            prompt: editorState.prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+            constraints: editorState.constraints.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        do {
+            try library.saveCustomPreset(preset)
+            editorState.editingCustomID = preset.id
+            editorState.selectedPresetID = "My Presets::\(preset.id)"
+            editorState.validationMessage = nil
+        } catch {
+            editorState.validationMessage = error.localizedDescription
+        }
+    }
+}
+
+@MainActor
+private final class PromptLibraryEditorState: ObservableObject {
+    @Published var selectedPresetID: String?
+    @Published var editingCustomID: String?
+    @Published var draftID = UUID().uuidString
+    @Published var title = ""
+    @Published var prompt = ""
+    @Published var constraints = ""
+    @Published var validationMessage: String?
 }
