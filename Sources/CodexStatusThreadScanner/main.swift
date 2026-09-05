@@ -202,7 +202,7 @@ do {
     try server.run()
     var messages = [
         ["method": "initialize", "id": 0, "params": [
-            "clientInfo": ["name": "codex_status", "title": "CodexStatus", "version": "0.2.0"]
+            "clientInfo": ["name": "codex_status", "title": "CodexStatus", "version": "0.2.1"]
         ]],
         ["method": "initialized", "params": [:]],
         ["method": "thread/list", "id": 1, "params": ["limit": 20, "sortKey": "updated_at"]]

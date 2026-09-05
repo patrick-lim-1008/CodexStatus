@@ -7,18 +7,21 @@ struct SettingsView: View {
 
     let onOpenDataFolder: () -> Void
     let onRemoveAllIntegrations: () -> Void
+    let onSendTestNotification: (AgentStatus) -> Void
 
     init(
         preferences: AppPreferences,
         model: StatusModel,
         onOpenDataFolder: @escaping () -> Void,
-        onRemoveAllIntegrations: @escaping () -> Void
+        onRemoveAllIntegrations: @escaping () -> Void,
+        onSendTestNotification: @escaping (AgentStatus) -> Void
     ) {
         self.preferences = preferences
         self.model = model
         viewState = SettingsViewState()
         self.onOpenDataFolder = onOpenDataFolder
         self.onRemoveAllIntegrations = onRemoveAllIntegrations
+        self.onSendTestNotification = onSendTestNotification
     }
 
     var body: some View {
@@ -162,13 +165,109 @@ struct SettingsView: View {
                     statusText: preferences.notificationsEnabled ? "Enabled" : "Off"
                 )
 
-                Toggle("Play a sound", isOn: $preferences.notificationSoundEnabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .padding(.leading, 38)
-                    .disabled(!preferences.notificationsEnabled)
+                if preferences.notificationsEnabled {
+                    Divider().padding(.leading, 38)
+                    notificationControls
+                        .padding(.leading, 38)
+                }
             }
         }
+    }
+
+    private var notificationControls: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            Text("Choose a separate alert and sound for each event. Needs Attention includes approval and input requests; Enhanced Activity improves detection accuracy.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            NotificationRuleRow(
+                title: "Completed",
+                detail: "A task finished successfully",
+                status: .done,
+                isEnabled: $preferences.notifyOnCompletion,
+                sound: $preferences.completionNotificationSound,
+                onTest: { onSendTestNotification(.done) }
+            )
+
+            Divider()
+
+            NotificationRuleRow(
+                title: "Needs Attention",
+                detail: "Approval or input is required",
+                status: .needsAttention,
+                isEnabled: $preferences.notifyOnAttention,
+                sound: $preferences.attentionNotificationSound,
+                onTest: { onSendTestNotification(.needsAttention) }
+            )
+
+            Divider()
+
+            NotificationRuleRow(
+                title: "Error",
+                detail: "A task failed or stopped unexpectedly",
+                status: .error,
+                isEnabled: $preferences.notifyOnError,
+                sound: $preferences.errorNotificationSound,
+                onTest: { onSendTestNotification(.error) }
+            )
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Quiet hours", isOn: $preferences.notificationQuietHoursEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+
+                if preferences.notificationQuietHoursEnabled {
+                    HStack(spacing: 7) {
+                        Text("From").foregroundStyle(.secondary)
+                        DatePicker(
+                            "Quiet hours start",
+                            selection: quietStartBinding,
+                            displayedComponents: .hourAndMinute
+                        )
+                        .labelsHidden()
+                        Text("to").foregroundStyle(.secondary)
+                        DatePicker(
+                            "Quiet hours end",
+                            selection: quietEndBinding,
+                            displayedComponents: .hourAndMinute
+                        )
+                        .labelsHidden()
+                    }
+                    .font(.caption)
+                }
+            }
+
+            Text("Test buttons ignore quiet hours and event switches.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var quietStartBinding: Binding<Date> {
+        timeBinding(for: $preferences.notificationQuietStartMinute)
+    }
+
+    private var quietEndBinding: Binding<Date> {
+        timeBinding(for: $preferences.notificationQuietEndMinute)
+    }
+
+    private func timeBinding(for minutes: Binding<Int>) -> Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(
+                    byAdding: .minute,
+                    value: minutes.wrappedValue,
+                    to: Calendar.current.startOfDay(for: Date())
+                ) ?? Date()
+            },
+            set: { date in
+                let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+                minutes.wrappedValue = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+            }
+        )
     }
 
     private var aboutSection: some View {
@@ -204,7 +303,7 @@ struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "0.2.0"
+        return version ?? "0.2.1"
     }
 
     private static let repositoryURL = URL(string: "https://github.com/patrick-lim-1008/CodexStatus")!
@@ -287,6 +386,52 @@ private struct PreferenceToggle: View {
             }
         }
         .toggleStyle(.switch)
+    }
+}
+
+private struct NotificationRuleRow: View {
+    let title: String
+    let detail: String
+    let status: AgentStatus
+    @Binding var isEnabled: Bool
+    @Binding var sound: NotificationSoundChoice
+    let onTest: () -> Void
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Circle()
+                .fill(status.color)
+                .frame(width: 8, height: 8)
+
+            Toggle(isOn: $isEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+
+            Spacer(minLength: 8)
+
+            Picker("Sound", selection: $sound) {
+                ForEach(NotificationSoundChoice.allCases) { choice in
+                    Text(choice.title).tag(choice)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 122)
+            .disabled(!isEnabled)
+
+            Button(action: onTest) {
+                Image(systemName: "bell")
+            }
+            .buttonStyle(.borderless)
+            .help("Test \(title) notification")
+        }
     }
 }
 

@@ -30,8 +30,8 @@ codesign --verify --deep --strict "$app_dir"
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_dir/Contents/Info.plist")
 build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_dir/Contents/Info.plist")
 ui_element=$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$app_dir/Contents/Info.plist")
-[[ "$version" == "0.2.0" ]] || { print -u2 "Unexpected version: $version"; exit 1; }
-[[ "$build" == "2" ]] || { print -u2 "Unexpected build: $build"; exit 1; }
+[[ "$version" == "0.2.1" ]] || { print -u2 "Unexpected version: $version"; exit 1; }
+[[ "$build" == "3" ]] || { print -u2 "Unexpected build: $build"; exit 1; }
 [[ "$ui_element" == "true" ]] || { print -u2 "App must remain menu-bar only"; exit 1; }
 
 for executable in \

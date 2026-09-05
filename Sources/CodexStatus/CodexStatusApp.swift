@@ -34,7 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         preferences: preferences,
         model: model,
         onOpenDataFolder: { [weak self] in self?.openDataFolder() },
-        onRemoveAllIntegrations: { [weak self] in self?.removeAllIntegrations() }
+        onRemoveAllIntegrations: { [weak self] in self?.removeAllIntegrations() },
+        onSendTestNotification: { [weak self] status in
+            self?.notificationController.sendTestNotification(for: status)
+        }
     )
 
     override init() {
@@ -171,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             .sink { [weak self] _ in
                 DispatchQueue.main.async {
                     self?.updateStatusItem()
+                    self?.applyNotificationPreferences()
                 }
             }
             .store(in: &preferenceObservers)
@@ -182,12 +186,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             }
             .store(in: &preferenceObservers)
 
-        preferences.$notificationsEnabled
-            .combineLatest(preferences.$notificationSoundEnabled)
-            .sink { [weak self] enabled, soundEnabled in
-                self?.notificationController.setEnabled(enabled, soundEnabled: soundEnabled)
-            }
-            .store(in: &preferenceObservers)
+        applyNotificationPreferences()
+    }
+
+    private func applyNotificationPreferences() {
+        notificationController.configure(NotificationConfiguration(
+            enabled: preferences.notificationsEnabled,
+            completionSound: preferences.completionNotificationSound,
+            attentionSound: preferences.attentionNotificationSound,
+            errorSound: preferences.errorNotificationSound,
+            notifyOnCompletion: preferences.notifyOnCompletion,
+            notifyOnAttention: preferences.notifyOnAttention,
+            notifyOnError: preferences.notifyOnError,
+            quietHoursEnabled: preferences.notificationQuietHoursEnabled,
+            quietStartMinute: preferences.notificationQuietStartMinute,
+            quietEndMinute: preferences.notificationQuietEndMinute
+        ))
     }
 
     private func applyLifecyclePreference(_ enabled: Bool) {

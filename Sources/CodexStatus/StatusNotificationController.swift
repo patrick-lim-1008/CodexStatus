@@ -1,4 +1,52 @@
+import AppKit
+import Foundation
 @preconcurrency import UserNotifications
+
+struct NotificationConfiguration: Equatable {
+    var enabled: Bool
+    var completionSound: NotificationSoundChoice
+    var attentionSound: NotificationSoundChoice
+    var errorSound: NotificationSoundChoice
+    var notifyOnCompletion: Bool
+    var notifyOnAttention: Bool
+    var notifyOnError: Bool
+    var quietHoursEnabled: Bool
+    var quietStartMinute: Int
+    var quietEndMinute: Int
+
+    func allows(_ status: AgentStatus) -> Bool {
+        switch status {
+        case .done: notifyOnCompletion
+        case .needsAttention: notifyOnAttention
+        case .error: notifyOnError
+        case .idle, .working: false
+        }
+    }
+
+    func sound(for status: AgentStatus) -> NotificationSoundChoice {
+        switch status {
+        case .done: completionSound
+        case .needsAttention: attentionSound
+        case .error: errorSound
+        case .idle, .working: .none
+        }
+    }
+
+    var hasAnySound: Bool {
+        [completionSound, attentionSound, errorSound].contains { $0 != .none }
+    }
+
+    func isQuiet(at date: Date, calendar: Calendar = .current) -> Bool {
+        guard quietHoursEnabled else { return false }
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        let minute = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+        let start = max(0, min(1_439, quietStartMinute))
+        let end = max(0, min(1_439, quietEndMinute))
+        if start == end { return true }
+        if start < end { return minute >= start && minute < end }
+        return minute >= start || minute < end
+    }
+}
 
 @MainActor
 final class StatusNotificationController: NSObject {
@@ -43,8 +91,18 @@ final class StatusNotificationController: NSObject {
     private let center: UNUserNotificationCenter
     private let openThread: OpenThreadAction
 
-    private var isEnabled = false
-    private var isSoundEnabled = true
+    private var configuration = NotificationConfiguration(
+        enabled: false,
+        completionSound: .glass,
+        attentionSound: .ping,
+        errorSound: .basso,
+        notifyOnCompletion: true,
+        notifyOnAttention: true,
+        notifyOnError: true,
+        quietHoursEnabled: false,
+        quietStartMinute: 22 * 60,
+        quietEndMinute: 8 * 60
+    )
     private var authorizationState = AuthorizationState.unknown
     private var authorizationGeneration = 0
     private var observedStatuses: [String: AgentStatus]?
@@ -52,6 +110,8 @@ final class StatusNotificationController: NSObject {
     private var notifiedEventKeys: Set<EventKey> = []
     private var notifiedEventOrder: [EventKey] = []
     private var ownedRequestIdentifiers: [String] = []
+    private var pendingTestNotification = false
+    private var pendingTestStatus: AgentStatus = .done
 
     init(
         center: UNUserNotificationCenter = .current(),
@@ -62,18 +122,20 @@ final class StatusNotificationController: NSObject {
         super.init()
     }
 
-    func setEnabled(_ enabled: Bool, soundEnabled: Bool) {
-        let wasEnabled = isEnabled
-        let shouldRequestSoundPermission = enabled && soundEnabled && !isSoundEnabled
-        isEnabled = enabled
-        isSoundEnabled = soundEnabled
+    func configure(_ newConfiguration: NotificationConfiguration) {
+        let wasEnabled = configuration.enabled
+        let shouldRequestSoundPermission = newConfiguration.enabled
+            && newConfiguration.hasAnySound
+            && !configuration.hasAnySound
+        configuration = newConfiguration
 
-        guard enabled else {
+        guard newConfiguration.enabled else {
             guard wasEnabled else { return }
             authorizationGeneration &+= 1
             authorizationState = .unknown
             observedStatuses = nil
             pendingEvents.removeAll(keepingCapacity: false)
+            pendingTestNotification = false
             center.removePendingNotificationRequests(withIdentifiers: ownedRequestIdentifiers)
             ownedRequestIdentifiers.removeAll(keepingCapacity: false)
             if center.delegate === self {
@@ -92,7 +154,7 @@ final class StatusNotificationController: NSObject {
     }
 
     func process(tasks: [AgentTask]) {
-        guard isEnabled else { return }
+        guard configuration.enabled else { return }
 
         var newestTasks: [String: AgentTask] = [:]
         for task in tasks {
@@ -114,10 +176,12 @@ final class StatusNotificationController: NSObject {
 
         observedStatuses = currentStatuses
         for task in newestTasks.values.sorted(by: { $0.updatedAt < $1.updatedAt }) {
-            guard Self.isNotifiable(task.status),
+            guard configuration.allows(task.status),
                   let previousStatus = previousStatuses[task.id],
                   previousStatus != task.status
             else { continue }
+
+            guard !configuration.isQuiet(at: Date()) else { continue }
 
             let event = NotificationEvent(
                 key: EventKey(
@@ -133,8 +197,23 @@ final class StatusNotificationController: NSObject {
         }
     }
 
-    private static func isNotifiable(_ status: AgentStatus) -> Bool {
-        status == .done || status == .needsAttention || status == .error
+    func sendTestNotification(for status: AgentStatus) {
+        guard configuration.enabled else { return }
+        switch authorizationState {
+        case .allowed:
+            deliverTestNotification(for: status)
+        case .unknown:
+            pendingTestNotification = true
+            pendingTestStatus = status
+            requestAuthorization()
+        case .requesting:
+            pendingTestNotification = true
+            pendingTestStatus = status
+        case .denied:
+            NSWorkspace.shared.open(
+                URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!
+            )
+        }
     }
 
     private func requestAuthorization() {
@@ -143,13 +222,13 @@ final class StatusNotificationController: NSObject {
         authorizationState = .requesting
 
         var options: UNAuthorizationOptions = [.alert]
-        if isSoundEnabled {
+        if configuration.hasAnySound {
             options.insert(.sound)
         }
         center.requestAuthorization(options: options) { [weak self] granted, _ in
             Task { @MainActor [weak self] in
                 guard let self,
-                      self.isEnabled,
+                      self.configuration.enabled,
                       self.authorizationGeneration == generation
                 else { return }
 
@@ -160,8 +239,13 @@ final class StatusNotificationController: NSObject {
                     for event in events {
                         self.deliver(event)
                     }
+                    if self.pendingTestNotification {
+                        self.pendingTestNotification = false
+                        self.deliverTestNotification(for: self.pendingTestStatus)
+                    }
                 } else {
                     self.pendingEvents.removeAll(keepingCapacity: false)
+                    self.pendingTestNotification = false
                 }
             }
         }
@@ -179,16 +263,19 @@ final class StatusNotificationController: NSObject {
     }
 
     private func deliver(_ event: NotificationEvent) {
-        guard isEnabled else { return }
+        guard configuration.enabled,
+              configuration.allows(event.key.status),
+              !configuration.isQuiet(at: Date())
+        else { return }
 
         let content = UNMutableNotificationContent()
         switch event.key.status {
         case .done:
             content.title = "Codex task completed"
         case .needsAttention:
-            content.title = "Codex needs your attention"
+            content.title = "Codex needs approval or input"
         case .error:
-            content.title = "Codex task stopped"
+            content.title = "Codex task failed"
         case .idle, .working:
             return
         }
@@ -197,11 +284,9 @@ final class StatusNotificationController: NSObject {
         content.threadIdentifier = event.key.threadID
         content.userInfo = [
             Self.threadIDUserInfoKey: event.key.threadID,
-            Self.soundEnabledUserInfoKey: isSoundEnabled
+            Self.soundEnabledUserInfoKey: usesNotificationCenterSound(for: event.key.status)
         ]
-        if isSoundEnabled {
-            content.sound = .default
-        }
+        applySound(to: content, choice: configuration.sound(for: event.key.status))
 
         let timestamp = Int64((event.key.updatedAt.timeIntervalSince1970 * 1_000).rounded())
         let identifier = Self.requestIdentifierPrefix
@@ -220,6 +305,48 @@ final class StatusNotificationController: NSObject {
             trigger: nil
         )
         center.add(request)
+    }
+
+    private func deliverTestNotification(for status: AgentStatus) {
+        guard configuration.enabled else { return }
+        let content = UNMutableNotificationContent()
+        switch status {
+        case .done:
+            content.title = "Test · Codex task completed"
+            content.body = "A finished task will use this notification and sound."
+        case .needsAttention:
+            content.title = "Test · Codex needs approval or input"
+            content.body = "An authorization or input request will use this alert."
+        case .error:
+            content.title = "Test · Codex task failed"
+            content.body = "A failed or aborted task will use this alert."
+        case .idle, .working:
+            return
+        }
+        content.userInfo = [
+            Self.soundEnabledUserInfoKey: usesNotificationCenterSound(for: status)
+        ]
+        applySound(to: content, choice: configuration.sound(for: status))
+
+        let identifier = Self.requestIdentifierPrefix + "test.\(UUID().uuidString)"
+        ownedRequestIdentifiers.append(identifier)
+        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+    }
+
+    private func usesNotificationCenterSound(for status: AgentStatus) -> Bool {
+        configuration.sound(for: status) == .systemDefault
+    }
+
+    private func applySound(
+        to content: UNMutableNotificationContent,
+        choice: NotificationSoundChoice
+    ) {
+        guard choice != .none else { return }
+        if let soundName = choice.appKitName {
+            NSSound(named: NSSound.Name(soundName))?.play()
+        } else {
+            content.sound = .default
+        }
     }
 
     private func remember(_ eventKey: EventKey) -> Bool {

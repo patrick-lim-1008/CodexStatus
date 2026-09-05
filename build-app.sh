@@ -15,6 +15,7 @@ mkdir -p "$build_dir/module-cache"
 
 swiftc \
     -O \
+    -whole-module-optimization \
     -parse-as-library \
     -sdk "$sdk_path" \
     -target arm64-apple-macosx13.0 \

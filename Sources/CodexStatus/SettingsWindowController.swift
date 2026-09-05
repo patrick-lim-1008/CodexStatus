@@ -7,13 +7,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         preferences: AppPreferences,
         model: StatusModel,
         onOpenDataFolder: @escaping () -> Void,
-        onRemoveAllIntegrations: @escaping () -> Void
+        onRemoveAllIntegrations: @escaping () -> Void,
+        onSendTestNotification: @escaping (AgentStatus) -> Void
     ) {
         let settingsView = SettingsView(
             preferences: preferences,
             model: model,
             onOpenDataFolder: onOpenDataFolder,
-            onRemoveAllIntegrations: onRemoveAllIntegrations
+            onRemoveAllIntegrations: onRemoveAllIntegrations,
+            onSendTestNotification: onSendTestNotification
         )
         let hostingController = NSHostingController(rootView: settingsView)
         let window = NSWindow(

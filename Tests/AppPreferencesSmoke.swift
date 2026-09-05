@@ -42,6 +42,15 @@ struct AppPreferencesSmoke {
             try expect(preferences.usageEnabled, "Usage Meter should be enabled by default")
             try expect(!preferences.enhancedActivityEnabled, "Enhanced Activity must be opt-in")
             try expect(!preferences.notificationsEnabled, "Notifications must be opt-in")
+            try expect(preferences.completionNotificationSound == .glass, "Completion should default to Glass")
+            try expect(preferences.attentionNotificationSound == .ping, "Attention should default to Ping")
+            try expect(preferences.errorNotificationSound == .basso, "Errors should default to Basso")
+            try expect(preferences.notifyOnCompletion, "Completion alerts should default on")
+            try expect(preferences.notifyOnAttention, "Attention alerts should default on")
+            try expect(preferences.notifyOnError, "Error alerts should default on")
+            try expect(!preferences.notificationQuietHoursEnabled, "Quiet hours should be opt-in")
+            try expect(preferences.notificationQuietStartMinute == 22 * 60, "Quiet hours should start at 22:00")
+            try expect(preferences.notificationQuietEndMinute == 8 * 60, "Quiet hours should end at 08:00")
         }
     }
 
@@ -71,6 +80,13 @@ struct AppPreferencesSmoke {
             first.enhancedActivityEnabled = false
             first.completionReadMode = .click
             first.showMenuBarCount = false
+            first.completionNotificationSound = .pop
+            first.attentionNotificationSound = .none
+            first.errorNotificationSound = .systemDefault
+            first.notifyOnError = false
+            first.notificationQuietHoursEnabled = true
+            first.notificationQuietStartMinute = 23 * 60 + 30
+            first.notificationQuietEndMinute = 7 * 60 + 15
 
             let restored = AppPreferences(
                 defaults: defaults,
@@ -81,6 +97,13 @@ struct AppPreferencesSmoke {
             try expect(!restored.enhancedActivityEnabled, "Stored extension preference must win")
             try expect(restored.completionReadMode == .click, "Stored read behavior must win")
             try expect(!restored.showMenuBarCount, "Stored appearance preference must win")
+            try expect(restored.completionNotificationSound == .pop, "Stored completion sound must win")
+            try expect(restored.attentionNotificationSound == .none, "Stored attention sound must win")
+            try expect(restored.errorNotificationSound == .systemDefault, "Stored error sound must win")
+            try expect(!restored.notifyOnError, "Stored event selection must win")
+            try expect(restored.notificationQuietHoursEnabled, "Stored quiet-hours choice must win")
+            try expect(restored.notificationQuietStartMinute == 23 * 60 + 30, "Stored quiet start must win")
+            try expect(restored.notificationQuietEndMinute == 7 * 60 + 15, "Stored quiet end must win")
         }
     }
 

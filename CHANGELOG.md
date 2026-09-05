@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Split macOS notifications into independent Completed, Needs Attention, and Error rules.
+- Add a separate enable switch, sound choice, and test button for each notification type.
+- Add optional quiet hours while keeping test notifications immediately available.
+- Preserve the original notification sound preference when upgrading from version 0.2.0.
+
 ## 0.2.0
 
 - Add a native settings window with General, Appearance, Extensions, and About & Privacy sections.

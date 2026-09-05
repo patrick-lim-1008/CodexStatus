@@ -32,7 +32,7 @@ Version 0.2 separates the quiet task indicator from optional capabilities:
 - **Core:** local task detection, five status colors, priority/count display, exact conversation opening, idle folding, and persistent completed-task acknowledgement.
 - **Usage Meter:** displays locally reported rate-limit windows. Enabled by default.
 - **Enhanced Activity:** installs additive user-level Codex lifecycle hooks for more precise approval and failure signals. Disabled by default on a new installation.
-- **macOS Notifications:** announces completion, attention, and failure transitions; notification sounds can be controlled separately. Disabled by default.
+- **macOS Notifications:** announces completion, approval/attention, and failure transitions. Each event has its own switch, sound, and test button, with optional quiet hours. Disabled by default.
 
 Appearance settings control project labels, menu-bar counts, multi-state color cycling, and idle folding. General settings control completion acknowledgement and whether CodexStatus follows the Codex app lifecycle.
 
