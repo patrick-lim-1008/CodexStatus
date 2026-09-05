@@ -27,7 +27,7 @@ itself is limited to 128 KB.
   "identifier": "com.example.prompt-pack",
   "name": "Example Prompt Pack",
   "version": "1.0.0",
-  "minimumHostVersion": "0.2.2",
+  "minimumHostVersion": "0.3.2",
   "author": "Example Author",
   "summary": "Adds a small set of reusable prompts.",
   "symbolName": "text.bubble",
@@ -117,10 +117,10 @@ characters and its constraints to 4,000 characters. Enabled packs are read
 locally; choosing a preset copies the combined text and opens the selected task.
 CodexStatus never injects an imported prompt into a task automatically.
 
-## Bundled native plugins
+## Bundled plugins
 
-- `com.codexstatus.progress-sidecar`
-- `com.codexstatus.prompt-library`
+- `com.codexstatus.progress-sidecar` — signed native plugin
+- `com.codexstatus.prompt-library` — bundled resource pack with a host-provided picker
 
 Progress Sidecar owns its prompt, manual and scheduled refresh behavior,
 temporary side-conversation helper, quota warning, and task-row presentation.

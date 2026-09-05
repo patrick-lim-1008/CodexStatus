@@ -35,11 +35,13 @@ layer. They require an external content source and remain planned plugins.
 These have a narrower audience, use model quota or external services, or make
 sense as independently maintained content:
 
-- Progress Sidecar;
-- prompt and constraint libraries;
-- Codex release summaries;
-- reset-probability integrations;
-- pet and theme resource packs.
+- [x] Progress Sidecar — released in 0.3.0;
+- [x] Prompt & Constraint Library and importable prompt packs — released in 0.3.1;
+- [x] Plugin permission preflight — released in 0.3.2;
+- [ ] Codex release summaries;
+- [ ] reset-probability integrations;
+- [ ] theme resource packs;
+- [ ] pet resource packs.
 
 ## 0.3 release gate
 

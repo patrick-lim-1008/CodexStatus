@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Correct version attribution and status details across the README, PluginKit specification, manifest schema, and 0.3 roadmap.
+- Document the release checklist used to keep tags, release notes, downloadable assets, and checksums consistent.
+
 ## 0.3.2
 
 - Add declarative plugin permissions with an up-front review during import, first enable, or migration from an already-enabled older plugin.
@@ -61,4 +64,8 @@
 
 ## 0.1.0
 
-- Initial open-source release.
+- Add a native Apple Silicon macOS menu-bar companion for Codex with Idle, Working, Needs Attention, Done, and Error states.
+- Open the exact selected Codex conversation and show real project context without exposing generated internal identifiers.
+- Display weekly and 5-hour usage windows when the signed-in account provides them.
+- Keep completed tasks visible until acknowledged, fold idle tasks, and cycle multiple active status colors.
+- Follow the Codex desktop app lifecycle with a lightweight local watcher.

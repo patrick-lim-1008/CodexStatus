@@ -32,6 +32,7 @@
     "permissions": {
       "type": "array",
       "maxItems": 16,
+      "uniqueItems": true,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -54,6 +55,54 @@
     {
       "if": { "properties": { "kind": { "const": "native" } } },
       "then": { "required": ["entryPoint"] }
+    },
+    {
+      "properties": { "permissions": {
+        "contains": { "properties": { "identifier": { "const": "readTaskActivity" } }, "required": ["identifier"] },
+        "minContains": 0, "maxContains": 1
+      } }
+    },
+    {
+      "properties": { "permissions": {
+        "contains": { "properties": { "identifier": { "const": "openCodexTasks" } }, "required": ["identifier"] },
+        "minContains": 0, "maxContains": 1
+      } }
+    },
+    {
+      "properties": { "permissions": {
+        "contains": { "properties": { "identifier": { "const": "createEphemeralSideConversation" } }, "required": ["identifier"] },
+        "minContains": 0, "maxContains": 1
+      } }
+    },
+    {
+      "properties": { "permissions": {
+        "contains": { "properties": { "identifier": { "const": "useModelQuota" } }, "required": ["identifier"] },
+        "minContains": 0, "maxContains": 1
+      } }
+    },
+    {
+      "properties": { "permissions": {
+        "contains": { "properties": { "identifier": { "const": "providePrompts" } }, "required": ["identifier"] },
+        "minContains": 0, "maxContains": 1
+      } }
+    },
+    {
+      "properties": { "permissions": {
+        "contains": { "properties": { "identifier": { "const": "writeClipboard" } }, "required": ["identifier"] },
+        "minContains": 0, "maxContains": 1
+      } }
+    },
+    {
+      "properties": { "permissions": {
+        "contains": { "properties": { "identifier": { "const": "postNotifications" } }, "required": ["identifier"] },
+        "minContains": 0, "maxContains": 1
+      } }
+    },
+    {
+      "properties": { "permissions": {
+        "contains": { "properties": { "identifier": { "const": "networkAccess" } }, "required": ["identifier"] },
+        "minContains": 0, "maxContains": 1
+      } }
     }
   ]
 }
