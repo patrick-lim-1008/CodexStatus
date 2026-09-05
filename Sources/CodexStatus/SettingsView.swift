@@ -5,10 +5,12 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var pluginRegistry: PluginRegistry
+    @ObservedObject var pluginPermissions: PluginPermissionController
     @ObservedObject var model: StatusModel
     @ObservedObject var updateChecker: AppUpdateChecker
     @ObservedObject var notificationController: StatusNotificationController
     @ObservedObject var lifecycleController: LifecycleController
+    @ObservedObject var sidebarController: SettingsSidebarController
     @ObservedObject private var viewState: SettingsViewState
 
     let onOpenDataFolder: () -> Void
@@ -17,45 +19,40 @@ struct SettingsView: View {
     init(
         preferences: AppPreferences,
         pluginRegistry: PluginRegistry,
+        pluginPermissions: PluginPermissionController,
         model: StatusModel,
         updateChecker: AppUpdateChecker,
         notificationController: StatusNotificationController,
         lifecycleController: LifecycleController,
+        sidebarController: SettingsSidebarController,
         onOpenDataFolder: @escaping () -> Void,
         onRemoveAllIntegrations: @escaping () -> Void
     ) {
         self.preferences = preferences
         self.pluginRegistry = pluginRegistry
+        self.pluginPermissions = pluginPermissions
         self.model = model
         self.updateChecker = updateChecker
         self.notificationController = notificationController
         self.lifecycleController = lifecycleController
+        self.sidebarController = sidebarController
         viewState = SettingsViewState()
         self.onOpenDataFolder = onOpenDataFolder
         self.onRemoveAllIntegrations = onRemoveAllIntegrations
     }
 
     var body: some View {
-        NavigationSplitView {
-            List(SettingsPane.allCases, selection: $viewState.selectedPane) { pane in
-                Label(pane.title, systemImage: pane.symbolName)
-                    .tag(Optional(pane))
+        HStack(spacing: 0) {
+            if sidebarController.isVisible {
+                settingsSidebar
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+
+                Divider()
             }
-            .navigationTitle("CodexStatus")
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 150, ideal: 170, max: 190)
-        } detail: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    paneTitle
-                    selectedPane
-                }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .background(Color(nsColor: .windowBackgroundColor))
+
+            settingsDetail
         }
-        .navigationSplitViewStyle(.balanced)
+        .animation(.easeInOut(duration: 0.18), value: sidebarController.isVisible)
         .frame(minWidth: 660, idealWidth: 720, minHeight: 460, idealHeight: 540)
         .alert("Remove CodexStatus integrations?", isPresented: $viewState.isConfirmingIntegrationRemoval) {
             Button("Cancel", role: .cancel) {}
@@ -90,7 +87,39 @@ struct SettingsView: View {
             PromptLibraryEditor(library: model.promptLibrary)
                 .preferredColorScheme(preferences.appTheme.colorScheme)
         }
+        .sheet(item: $pluginPermissions.pendingRequest) { request in
+            PluginPermissionReviewSheet(
+                request: request,
+                controller: pluginPermissions
+            )
+            .preferredColorScheme(preferences.appTheme.colorScheme)
+            .onDisappear {
+                pluginPermissions.cancelPendingRequest()
+            }
+        }
         .preferredColorScheme(preferences.appTheme.colorScheme)
+    }
+
+    private var settingsSidebar: some View {
+        List(SettingsPane.allCases, selection: $viewState.selectedPane) { pane in
+            Label(pane.title, systemImage: pane.symbolName)
+                .tag(Optional(pane))
+        }
+        .listStyle(.sidebar)
+        .frame(width: 172)
+    }
+
+    private var settingsDetail: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                paneTitle
+                selectedPane
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var paneTitle: some View {
@@ -307,14 +336,23 @@ struct SettingsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 10) {
+                    let plugin = installedPlugin(
+                        BuiltInPluginIdentifiers.progressSidecar,
+                        fallback: BuiltInPluginFallbacks.progressSidecar
+                    )
                     PluginRow(
-                        descriptor: manifest(
-                            BuiltInPluginIdentifiers.progressSidecar,
-                            fallback: BuiltInPluginFallbacks.progressSidecar
-                        ),
+                        descriptor: plugin.manifest,
                         source: .bundled,
-                        isOn: $preferences.progressSidecarEnabled,
-                        statusText: preferences.progressSidecarEnabled ? preferences.progressRefreshInterval.title : "Off"
+                        isOn: permissionControlledBinding(
+                            plugin,
+                            get: { preferences.progressSidecarEnabled },
+                            set: { preferences.progressSidecarEnabled = $0 }
+                        ),
+                        statusText: pluginStatus(
+                            plugin,
+                            isEnabled: preferences.progressSidecarEnabled,
+                            enabledText: preferences.progressRefreshInterval.title
+                        )
                     )
 
                     if preferences.progressSidecarEnabled {
@@ -327,14 +365,23 @@ struct SettingsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 10) {
+                    let plugin = installedPlugin(
+                        BuiltInPluginIdentifiers.promptLibrary,
+                        fallback: BuiltInPluginFallbacks.promptLibrary
+                    )
                     PluginRow(
-                        descriptor: manifest(
-                            BuiltInPluginIdentifiers.promptLibrary,
-                            fallback: BuiltInPluginFallbacks.promptLibrary
-                        ),
+                        descriptor: plugin.manifest,
                         source: .bundled,
-                        isOn: $preferences.promptLibraryEnabled,
-                        statusText: model.promptLibrary.statusText
+                        isOn: permissionControlledBinding(
+                            plugin,
+                            get: { preferences.promptLibraryEnabled },
+                            set: { preferences.promptLibraryEnabled = $0 }
+                        ),
+                        statusText: pluginStatus(
+                            plugin,
+                            isEnabled: preferences.promptLibraryEnabled,
+                            enabledText: model.promptLibrary.statusText
+                        )
                     )
 
                     if preferences.promptLibraryEnabled {
@@ -372,7 +419,11 @@ struct SettingsView: View {
                                 descriptor: plugin.manifest,
                                 source: .imported,
                                 isOn: importedPluginBinding(plugin.id),
-                                statusText: pluginRegistry.isImportedPluginEnabled(plugin.id) ? "Enabled" : "Installed · disabled",
+                                statusText: pluginStatus(
+                                    plugin,
+                                    isEnabled: pluginRegistry.isImportedPluginEnabled(plugin.id),
+                                    enabledText: "Enabled"
+                                ),
                                 onRemove: { viewState.pluginAlert = .remove(plugin) }
                             )
                         }
@@ -382,8 +433,24 @@ struct SettingsView: View {
         }
     }
 
-    private func manifest(_ identifier: String, fallback: PluginManifest) -> PluginManifest {
-        pluginRegistry.plugin(identifier: identifier)?.manifest ?? fallback
+    private func installedPlugin(_ identifier: String, fallback: PluginManifest) -> InstalledPlugin {
+        pluginRegistry.plugin(identifier: identifier) ?? InstalledPlugin(
+            manifest: fallback,
+            source: .bundled,
+            packageURL: Bundle.main.bundleURL
+        )
+    }
+
+    private func pluginStatus(
+        _ plugin: InstalledPlugin,
+        isEnabled: Bool,
+        enabledText: String
+    ) -> String {
+        if isEnabled { return enabledText }
+        if !pluginPermissions.isPreflightSatisfied(for: plugin.manifest) {
+            return "Off · permission review required"
+        }
+        return plugin.source == .imported ? "Installed · disabled" : "Off"
     }
 
     @ViewBuilder
@@ -420,7 +487,33 @@ struct SettingsView: View {
     private func importedPluginBinding(_ identifier: String) -> Binding<Bool> {
         Binding(
             get: { pluginRegistry.isImportedPluginEnabled(identifier) },
-            set: { pluginRegistry.setImportedPlugin(identifier, enabled: $0) }
+            set: { enabled in
+                guard let plugin = pluginRegistry.plugin(identifier: identifier) else { return }
+                if enabled {
+                    pluginPermissions.requestEnable(plugin) { approved in
+                        pluginRegistry.setImportedPlugin(identifier, enabled: approved)
+                    }
+                } else {
+                    pluginRegistry.setImportedPlugin(identifier, enabled: false)
+                }
+            }
+        )
+    }
+
+    private func permissionControlledBinding(
+        _ plugin: InstalledPlugin,
+        get: @escaping () -> Bool,
+        set: @escaping (Bool) -> Void
+    ) -> Binding<Bool> {
+        Binding(
+            get: get,
+            set: { enabled in
+                if enabled {
+                    pluginPermissions.requestEnable(plugin, activate: set)
+                } else {
+                    set(false)
+                }
+            }
         )
     }
 
@@ -440,10 +533,20 @@ struct SettingsView: View {
 
         do {
             let plugin = try pluginRegistry.importPlugin(from: url)
-            viewState.pluginAlert = .message(
-                title: "Plugin Imported",
-                detail: "\(plugin.manifest.name) \(plugin.manifest.version) was installed disabled. Review its capabilities before enabling it."
-            )
+            if plugin.manifest.permissions.isEmpty {
+                viewState.pluginAlert = .message(
+                    title: "Plugin Imported",
+                    detail: "\(plugin.manifest.name) \(plugin.manifest.version) was installed disabled."
+                )
+            } else {
+                // Re-importing an enabled pack may add permissions. Stop it
+                // before the new declaration is reviewed so it never runs in
+                // a partially authorized state.
+                pluginRegistry.setImportedPlugin(plugin.id, enabled: false)
+                pluginPermissions.requestEnable(plugin) { approved in
+                    pluginRegistry.setImportedPlugin(plugin.id, enabled: approved)
+                }
+            }
         } catch {
             viewState.pluginAlert = .message(
                 title: "Plugin Was Not Imported",
@@ -464,6 +567,7 @@ struct SettingsView: View {
     private func removeImportedPlugin(_ plugin: InstalledPlugin) {
         do {
             try pluginRegistry.removePlugin(identifier: plugin.id)
+            pluginPermissions.revoke(plugin)
         } catch {
             viewState.pluginAlert = .message(title: "Plugin Was Not Removed", detail: error.localizedDescription)
         }
@@ -642,10 +746,32 @@ struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "0.3.1"
+        return version ?? "0.3.2"
     }
 
     private static let repositoryURL = URL(string: "https://github.com/patrick-lim-1008/CodexStatus")!
+}
+
+@MainActor
+final class SettingsSidebarController: ObservableObject {
+    @Published private(set) var isVisible: Bool
+
+    private let defaults: UserDefaults
+    private let storageKey = "settings.sidebarVisible"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if defaults.object(forKey: storageKey) == nil {
+            isVisible = true
+        } else {
+            isVisible = defaults.bool(forKey: storageKey)
+        }
+    }
+
+    func toggle() {
+        isVisible.toggle()
+        defaults.set(isVisible, forKey: storageKey)
+    }
 }
 
 @MainActor
@@ -828,6 +954,99 @@ private struct PluginRow: View {
             statusText: statusText,
             onRemove: onRemove
         )
+    }
+}
+
+private struct PluginPermissionReviewSheet: View {
+    let request: PluginPermissionRequest
+    @ObservedObject var controller: PluginPermissionController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Review before enabling")
+                        .font(.headline)
+                    Text(request.plugin.manifest.name)
+                        .font(.subheadline.weight(.medium))
+                    Text("CodexStatus asks for every declared permission now so the plugin does not interrupt you later or start only halfway.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(request.plugin.manifest.permissions) { permission in
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: PluginPermissionCatalog.symbolName(for: permission.identifier))
+                                .foregroundStyle(.tint)
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(PluginPermissionCatalog.title(for: permission.identifier))
+                                        .font(.system(size: 12, weight: .medium))
+                                    if PluginPermissionCatalog.requiresSystemAuthorization(permission.identifier) {
+                                        Text("macOS")
+                                            .font(.system(size: 9, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 2)
+                                            .background(.quaternary, in: Capsule())
+                                    }
+                                }
+                                Text(permission.reason)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 260)
+
+            if let failure = controller.failureMessage {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(failure)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            HStack {
+                Text("The plugin stays off unless the full preflight succeeds.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button("Cancel") {
+                    controller.cancelPendingRequest()
+                }
+                .disabled(controller.isRequesting)
+                Button(controller.isRequesting ? "Requesting…" : "Allow & Enable") {
+                    controller.approvePendingRequest()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(controller.isRequesting)
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+        .frame(minHeight: 300)
+        .interactiveDismissDisabled(controller.isRequesting)
     }
 }
 

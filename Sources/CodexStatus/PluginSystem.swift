@@ -6,6 +6,13 @@ enum PluginKind: String, Codable, Sendable {
     case resourcePack
 }
 
+struct PluginPermissionDeclaration: Codable, Identifiable, Equatable, Sendable {
+    let identifier: String
+    let reason: String
+
+    var id: String { identifier }
+}
+
 struct PluginManifest: Codable, Identifiable, Equatable, Sendable {
     let schemaVersion: Int
     let identifier: String
@@ -18,9 +25,137 @@ struct PluginManifest: Codable, Identifiable, Equatable, Sendable {
     let kind: PluginKind
     let entryPoint: String?
     let capabilities: [String]
+    let permissions: [PluginPermissionDeclaration]
     let privacyDescription: String
 
     var id: String { identifier }
+
+    init(
+        schemaVersion: Int,
+        identifier: String,
+        name: String,
+        version: String,
+        minimumHostVersion: String,
+        author: String,
+        summary: String,
+        symbolName: String,
+        kind: PluginKind,
+        entryPoint: String?,
+        capabilities: [String],
+        permissions: [PluginPermissionDeclaration] = [],
+        privacyDescription: String
+    ) {
+        self.schemaVersion = schemaVersion
+        self.identifier = identifier
+        self.name = name
+        self.version = version
+        self.minimumHostVersion = minimumHostVersion
+        self.author = author
+        self.summary = summary
+        self.symbolName = symbolName
+        self.kind = kind
+        self.entryPoint = entryPoint
+        self.capabilities = capabilities
+        self.permissions = permissions
+        self.privacyDescription = privacyDescription
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case identifier
+        case name
+        case version
+        case minimumHostVersion
+        case author
+        case summary
+        case symbolName
+        case kind
+        case entryPoint
+        case capabilities
+        case permissions
+        case privacyDescription
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        identifier = try container.decode(String.self, forKey: .identifier)
+        name = try container.decode(String.self, forKey: .name)
+        version = try container.decode(String.self, forKey: .version)
+        minimumHostVersion = try container.decode(String.self, forKey: .minimumHostVersion)
+        author = try container.decode(String.self, forKey: .author)
+        summary = try container.decode(String.self, forKey: .summary)
+        symbolName = try container.decode(String.self, forKey: .symbolName)
+        kind = try container.decode(PluginKind.self, forKey: .kind)
+        entryPoint = try container.decodeIfPresent(String.self, forKey: .entryPoint)
+        capabilities = try container.decode([String].self, forKey: .capabilities)
+        permissions = try container.decodeIfPresent(
+            [PluginPermissionDeclaration].self,
+            forKey: .permissions
+        ) ?? []
+        privacyDescription = try container.decode(String.self, forKey: .privacyDescription)
+    }
+}
+
+struct PluginPermissionGrantRecord: Codable, Equatable, Sendable {
+    let fingerprint: String
+    let grantedAt: Date
+}
+
+/// Stores only the permission declaration the user approved. Any change to the
+/// permission identifiers or their explanation invalidates the old approval.
+final class PluginPermissionLedger: @unchecked Sendable {
+    private let defaults: UserDefaults
+    private let storageKey = "plugins.permissionPreflight.grants"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func isGranted(for manifest: PluginManifest) -> Bool {
+        guard !manifest.permissions.isEmpty else { return true }
+        return records()[manifest.identifier]?.fingerprint == Self.fingerprint(for: manifest)
+    }
+
+    func grant(_ manifest: PluginManifest, at date: Date = Date()) {
+        guard !manifest.permissions.isEmpty else { return }
+        var updated = records()
+        updated[manifest.identifier] = PluginPermissionGrantRecord(
+            fingerprint: Self.fingerprint(for: manifest),
+            grantedAt: date
+        )
+        persist(updated)
+    }
+
+    func revoke(identifier: String) {
+        var updated = records()
+        updated.removeValue(forKey: identifier)
+        persist(updated)
+    }
+
+    static func fingerprint(for manifest: PluginManifest) -> String {
+        manifest.permissions
+            .sorted { lhs, rhs in
+                if lhs.identifier != rhs.identifier { return lhs.identifier < rhs.identifier }
+                return lhs.reason < rhs.reason
+            }
+            .map { "\($0.identifier)\u{001F}\($0.reason)" }
+            .joined(separator: "\u{001E}")
+    }
+
+    private func records() -> [String: PluginPermissionGrantRecord] {
+        guard let data = defaults.data(forKey: storageKey),
+              let value = try? JSONDecoder().decode(
+                [String: PluginPermissionGrantRecord].self,
+                from: data
+              ) else { return [:] }
+        return value
+    }
+
+    private func persist(_ records: [String: PluginPermissionGrantRecord]) {
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        defaults.set(data, forKey: storageKey)
+    }
 }
 
 enum PluginSource: String, Equatable, Sendable {
@@ -44,6 +179,8 @@ enum PluginRegistryError: LocalizedError {
     case unsupportedSchema(Int)
     case invalidIdentifier
     case invalidVersion
+    case invalidPermissions
+    case unsupportedPermission(String)
     case incompatibleHost(String)
     case externalNativeCodeNotAllowed
     case bundledIdentifierConflict
@@ -62,6 +199,8 @@ enum PluginRegistryError: LocalizedError {
         case .unsupportedSchema(let version): "Plugin schema version \(version) is not supported."
         case .invalidIdentifier: "The plugin identifier must use reverse-domain form, such as com.example.plugin."
         case .invalidVersion: "The plugin version must contain only numeric components."
+        case .invalidPermissions: "The plugin permission list is incomplete, duplicated, or does not match its capabilities."
+        case .unsupportedPermission(let permission): "This CodexStatus version does not support the requested permission: \(permission)."
         case .incompatibleHost(let version): "This plugin requires CodexStatus \(version) or later."
         case .externalNativeCodeNotAllowed: "PluginKit v1 does not execute imported native code. Import a resource-pack plugin instead."
         case .bundledIdentifierConflict: "An imported plugin cannot replace a bundled plugin."
@@ -83,6 +222,7 @@ final class PluginRegistry: ObservableObject {
 
     @Published private(set) var plugins: [InstalledPlugin] = []
     @Published private(set) var enabledImportedPluginIDs: Set<String> = []
+    @Published private(set) var permissionBlockedImportedPluginIDs: Set<String> = []
 
     private let bundledRoot: URL
     private let installedRoot: URL
@@ -104,7 +244,7 @@ final class PluginRegistry: ObservableObject {
             ?? Bundle.main.bundleURL
                 .appendingPathComponent("Contents/Resources/Plugins", isDirectory: true)
         let hostVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "0.3.0"
+            ?? "0.3.2"
         self.init(
             bundledRoot: bundledRoot,
             installedRoot: installedRoot,
@@ -152,16 +292,20 @@ final class PluginRegistry: ObservableObject {
     }
 
     func setImportedPlugin(_ identifier: String, enabled: Bool) {
-        guard importedPlugins.contains(where: { $0.id == identifier }) else { return }
+        guard let plugin = importedPlugins.first(where: { $0.id == identifier }) else { return }
         if enabled {
+            guard PluginPermissionLedger(defaults: defaults).isGranted(for: plugin.manifest) else { return }
             enabledImportedPluginIDs.insert(identifier)
+            permissionBlockedImportedPluginIDs.remove(identifier)
         } else {
             enabledImportedPluginIDs.remove(identifier)
+            permissionBlockedImportedPluginIDs.remove(identifier)
         }
         persistEnabledPlugins()
     }
 
     func reload() {
+        let previouslyEnabledIDs = enabledImportedPluginIDs
         let bundled = scan(root: bundledRoot, source: .bundled)
         let imported = scan(root: installedRoot, source: .imported)
             .filter { candidate in !bundled.contains { $0.id == candidate.id } }
@@ -169,7 +313,16 @@ final class PluginRegistry: ObservableObject {
             if $0.source != $1.source { return $0.source == .bundled }
             return $0.manifest.name.localizedCaseInsensitiveCompare($1.manifest.name) == .orderedAscending
         }
-        enabledImportedPluginIDs.formIntersection(Set(imported.map(\.id)))
+        let safelyEnabledIDs = Set(imported.compactMap { plugin in
+            PluginPermissionLedger(defaults: defaults).isGranted(for: plugin.manifest)
+                ? plugin.id
+                : nil
+        })
+        let installedIDs = Set(imported.map(\.id))
+        permissionBlockedImportedPluginIDs = previouslyEnabledIDs
+            .intersection(installedIDs)
+            .subtracting(safelyEnabledIDs)
+        enabledImportedPluginIDs.formIntersection(safelyEnabledIDs)
         persistEnabledPlugins()
     }
 
@@ -236,6 +389,7 @@ final class PluginRegistry: ObservableObject {
         do {
             try fileManager.removeItem(at: plugin.packageURL)
             enabledImportedPluginIDs.remove(identifier)
+            permissionBlockedImportedPluginIDs.remove(identifier)
             reload()
         } catch {
             throw PluginRegistryError.installFailed
@@ -303,6 +457,20 @@ final class PluginRegistry: ObservableObject {
               manifest.privacyDescription.count <= 500,
               manifest.capabilities.count <= 24 else {
             throw PluginRegistryError.invalidManifest
+        }
+        guard manifest.permissions.count <= 16,
+              Set(manifest.permissions.map(\.identifier)).count == manifest.permissions.count else {
+            throw PluginRegistryError.invalidPermissions
+        }
+        for permission in manifest.permissions {
+            guard PluginPermissionCatalog.isSupported(permission.identifier) else {
+                throw PluginRegistryError.unsupportedPermission(permission.identifier)
+            }
+            guard manifest.capabilities.contains(permission.identifier),
+                  !permission.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  permission.reason.count <= 240 else {
+                throw PluginRegistryError.invalidPermissions
+            }
         }
         if source == .imported, manifest.kind == .native {
             throw PluginRegistryError.externalNativeCodeNotAllowed
@@ -379,12 +547,56 @@ enum PluginCapabilityLabels {
         "useModelQuota": "Uses Codex model quota",
         "providePrompts": "Provides prompt presets",
         "writeClipboard": "Writes the selected preset to the clipboard",
+        "networkAccess": "Connects to declared network services",
         "provideThemes": "Provides appearance themes",
         "providePetAssets": "Provides pet artwork"
     ]
 
     static func title(for capability: String) -> String {
         labels[capability] ?? capability
+    }
+}
+
+enum PluginPermissionCatalog {
+    static let supportedIdentifiers: Set<String> = [
+        "readTaskActivity",
+        "openCodexTasks",
+        "createEphemeralSideConversation",
+        "useModelQuota",
+        "providePrompts",
+        "writeClipboard",
+        "postNotifications",
+        "networkAccess"
+    ]
+
+    static func isSupported(_ identifier: String) -> Bool {
+        supportedIdentifiers.contains(identifier)
+    }
+
+    static func symbolName(for identifier: String) -> String {
+        switch identifier {
+        case "readTaskActivity": "list.bullet.rectangle"
+        case "openCodexTasks": "arrow.up.forward.app"
+        case "createEphemeralSideConversation": "sidebar.right"
+        case "useModelQuota": "gauge.with.dots.needle.50percent"
+        case "providePrompts": "text.badge.plus"
+        case "writeClipboard": "clipboard"
+        case "postNotifications": "bell.badge"
+        case "networkAccess": "network"
+        default: "lock.shield"
+        }
+    }
+
+    static func title(for identifier: String) -> String {
+        switch identifier {
+        case "providePrompts": "Provide prompt presets"
+        case "networkAccess": "Access the network"
+        default: PluginCapabilityLabels.title(for: identifier)
+        }
+    }
+
+    static func requiresSystemAuthorization(_ identifier: String) -> Bool {
+        identifier == "postNotifications"
     }
 }
 

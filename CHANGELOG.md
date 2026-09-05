@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add declarative plugin permissions with an up-front review during import, first enable, or migration from an already-enabled older plugin.
+- Keep a plugin completely disabled when any required system authorization is denied, and prevent registry callers from bypassing preflight.
+- Invalidate approval when a plugin adds or changes a permission declaration while preserving approval across ordinary disable/enable cycles.
+- Reject unknown, duplicate, mismatched, or malformed permission requests before installing a plugin.
+
+## 0.3.1
+
 - Add a local Prompt & Constraint Library plugin prototype with editable personal presets and safe imported prompt packs.
 - Add a compact task-row picker that copies the selected preset and opens the corresponding Codex task without injecting messages automatically.
 - Prevent copied builds and the lifecycle watcher from creating duplicate menu-bar instances.

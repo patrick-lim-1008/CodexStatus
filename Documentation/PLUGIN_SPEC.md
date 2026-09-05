@@ -32,7 +32,11 @@ itself is limited to 128 KB.
   "summary": "Adds a small set of reusable prompts.",
   "symbolName": "text.bubble",
   "kind": "resourcePack",
-  "capabilities": ["providePrompts"],
+  "capabilities": ["providePrompts", "writeClipboard"],
+  "permissions": [{
+    "identifier": "writeClipboard",
+    "reason": "Copy a selected preset so the user can paste it into Codex."
+  }],
   "privacyDescription": "Adds local text presets and does not access task data."
 }
 ```
@@ -43,7 +47,37 @@ itself is limited to 128 KB.
 - `kind` is `native` or `resourcePack`.
 - `entryPoint` is required only for bundled native plugins.
 - `capabilities` must accurately describe every host feature the plugin needs.
+- `permissions` is optional for compatibility with existing resource packs. A
+  permission entry must also appear in `capabilities` and include a concise
+  user-facing reason. Plugins that declare permissions should require host
+  version `0.3.2` or later.
 - `privacyDescription` explains the effect in user-facing language.
+
+## Permission preflight
+
+CodexStatus reviews all declared permissions before a plugin can run. Importing
+a plugin with permissions opens the review immediately; enabling an installed
+plugin opens it if approval is missing. One confirmation performs every
+supported system request in sequence. If any required request is denied, the
+plugin remains fully disabled and no partial runtime is started.
+
+Approval is stored against the complete permission declaration. Changing an
+identifier or its reason invalidates the previous approval and triggers a new
+review. Disabling a plugin keeps the approval so it can be re-enabled without
+repeating unchanged prompts; removing the plugin clears its approval.
+
+Supported permission identifiers in PluginKit v1 are:
+
+- `readTaskActivity`
+- `openCodexTasks`
+- `createEphemeralSideConversation`
+- `useModelQuota`
+- `providePrompts`
+- `writeClipboard`
+- `postNotifications` (requests macOS authorization during preflight)
+- `networkAccess`
+
+Unknown permissions are rejected at import rather than deferred until use.
 
 ## Trust model
 
@@ -55,7 +89,9 @@ rejected. Imported plugins are copied to:
 ~/Library/Application Support/CodexStatus/Plugins/
 ```
 
-They are disabled after installation until the user explicitly enables them.
+Packages without permissions are disabled after installation until the user
+explicitly enables them. Packages with permissions open preflight immediately
+after import and are enabled only when the entire review succeeds.
 An imported plugin cannot replace a bundled plugin identifier. Re-importing the
 same identifier performs an atomic same-version or newer-version update.
 

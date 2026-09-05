@@ -2,13 +2,27 @@
   "schemaVersion": 1,
   "identifier": "com.codexstatus.progress-sidecar",
   "name": "Progress Sidecar",
-  "version": "1.0.0",
-  "minimumHostVersion": "0.3.0",
+  "version": "1.1.0",
+  "minimumHostVersion": "0.3.2",
   "author": "CodexStatus",
   "summary": "Shows concise progress through a temporary /side-style conversation.",
   "symbolName": "sidebar.right",
   "kind": "native",
   "entryPoint": "progress-sidecar",
   "capabilities": ["readTaskActivity", "createEphemeralSideConversation", "useModelQuota"],
+  "permissions": [
+    {
+      "identifier": "readTaskActivity",
+      "reason": "Read the selected task's local title and observable activity to prepare a progress request."
+    },
+    {
+      "identifier": "createEphemeralSideConversation",
+      "reason": "Create a temporary read-only side conversation without changing the source task."
+    },
+    {
+      "identifier": "useModelQuota",
+      "reason": "Use Codex model quota whenever a manual or scheduled progress summary is requested."
+    }
+  ],
   "privacyDescription": "Creates an ephemeral, read-only fork of the selected task. The summary stays in CodexStatus and does not enter the source conversation. Each refresh uses account quota."
 }

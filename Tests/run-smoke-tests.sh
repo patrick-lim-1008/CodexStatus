@@ -38,7 +38,20 @@ swiftc \
     Sources/CodexStatus/PluginSystem.swift \
     Tests/PluginSystemSmoke.swift \
     -o "$test_build_dir/PluginSystemSmoke"
-"$test_build_dir/PluginSystemSmoke"
+CODEX_STATUS_VALIDATE_BUNDLED_ROOT="$app_dir/Contents/Resources/Plugins" \
+    "$test_build_dir/PluginSystemSmoke"
+
+swiftc \
+    -parse-as-library \
+    -sdk "$sdk_path" \
+    -target arm64-apple-macosx13.0 \
+    -module-cache-path "$test_build_dir/module-cache" \
+    -interface-compiler-version "$sdk_compiler_version" \
+    Sources/CodexStatus/PluginSystem.swift \
+    Sources/CodexStatus/PluginPermissionController.swift \
+    Tests/PluginPermissionSmoke.swift \
+    -o "$test_build_dir/PluginPermissionSmoke"
+"$test_build_dir/PluginPermissionSmoke"
 
 swiftc \
     -parse-as-library \
@@ -97,8 +110,8 @@ plugin_count=$(find "$app_dir/Contents/Resources/Plugins" -name manifest.json -m
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_dir/Contents/Info.plist")
 build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_dir/Contents/Info.plist")
 ui_element=$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$app_dir/Contents/Info.plist")
-[[ "$version" == "0.3.1" ]] || { print -u2 "Unexpected version: $version"; exit 1; }
-[[ "$build" == "8" ]] || { print -u2 "Unexpected build: $build"; exit 1; }
+[[ "$version" == "0.3.2" ]] || { print -u2 "Unexpected version: $version"; exit 1; }
+[[ "$build" == "9" ]] || { print -u2 "Unexpected build: $build"; exit 1; }
 [[ "$ui_element" == "true" ]] || { print -u2 "App must remain menu-bar only"; exit 1; }
 
 for executable in \

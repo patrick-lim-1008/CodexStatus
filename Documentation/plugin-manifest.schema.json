@@ -29,6 +29,25 @@
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1, "maxLength": 80 }
     },
+    "permissions": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["identifier", "reason"],
+        "properties": {
+          "identifier": {
+            "enum": [
+              "readTaskActivity", "openCodexTasks", "createEphemeralSideConversation",
+              "useModelQuota", "providePrompts", "writeClipboard", "postNotifications",
+              "networkAccess"
+            ]
+          },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 240 }
+        }
+      }
+    },
     "privacyDescription": { "type": "string", "maxLength": 500 }
   },
   "allOf": [

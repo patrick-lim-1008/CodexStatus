@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let instanceGuard: SingleInstanceGuard
     private let preferences: AppPreferences
     private let pluginRegistry: PluginRegistry
+    private let pluginPermissions: PluginPermissionController
     private let model: StatusModel
     private let updateChecker: AppUpdateChecker
     private let lifecycleController: LifecycleController
@@ -29,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var taskObserver: AnyCancellable?
     private var statusCycleTimer: Timer?
     private var statusCycleIndex = 0
+    private var startupPermissionPlugin: InstalledPlugin?
 
     private lazy var notificationController = StatusNotificationController { [weak self] threadID in
         self?.model.openThread(threadID)
@@ -37,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private lazy var settingsWindowController = SettingsWindowController(
         preferences: preferences,
         pluginRegistry: pluginRegistry,
+        pluginPermissions: pluginPermissions,
         model: model,
         updateChecker: updateChecker,
         notificationController: notificationController,
@@ -56,7 +59,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             existingLifecycleInstalled: existingLifecycleInstalled
         )
         self.preferences = preferences
-        pluginRegistry = PluginRegistry()
+        let pluginRegistry = PluginRegistry()
+        self.pluginRegistry = pluginRegistry
+        let pluginPermissions = PluginPermissionController()
+        self.pluginPermissions = pluginPermissions
+
+        var startupPermissionPlugin: InstalledPlugin?
+        if preferences.progressSidecarEnabled,
+           let plugin = pluginRegistry.plugin(identifier: BuiltInPluginIdentifiers.progressSidecar),
+           !pluginPermissions.isPreflightSatisfied(for: plugin.manifest) {
+            preferences.progressSidecarEnabled = false
+            startupPermissionPlugin = plugin
+        }
+        if preferences.promptLibraryEnabled,
+           let plugin = pluginRegistry.plugin(identifier: BuiltInPluginIdentifiers.promptLibrary),
+           !pluginPermissions.isPreflightSatisfied(for: plugin.manifest) {
+            preferences.promptLibraryEnabled = false
+            startupPermissionPlugin = startupPermissionPlugin ?? plugin
+        }
+        for plugin in pluginRegistry.importedPlugins
+        where pluginRegistry.permissionBlockedImportedPluginIDs.contains(plugin.id) {
+            startupPermissionPlugin = startupPermissionPlugin ?? plugin
+        }
+        self.startupPermissionPlugin = startupPermissionPlugin
         updateChecker = AppUpdateChecker()
         lifecycleController = LifecycleController()
         model = StatusModel(preferences: preferences, pluginRegistry: pluginRegistry)
@@ -113,6 +138,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if CommandLine.arguments.contains("--settings") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.openSettings()
+            }
+        }
+        if let plugin = startupPermissionPlugin {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self else { return }
+                self.openSettings()
+                self.pluginPermissions.requestEnable(plugin) { [weak self] approved in
+                    self?.setPlugin(plugin, enabled: approved)
+                }
+                self.startupPermissionPlugin = nil
             }
         }
     }
@@ -338,6 +373,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         preferences.followCodexLifecycle = false
         model.removeIntegration()
         lifecycleController.apply(enabled: false)
+    }
+
+    private func setPlugin(_ plugin: InstalledPlugin, enabled: Bool) {
+        switch plugin.id {
+        case BuiltInPluginIdentifiers.progressSidecar:
+            preferences.progressSidecarEnabled = enabled
+        case BuiltInPluginIdentifiers.promptLibrary:
+            preferences.promptLibraryEnabled = enabled
+        default:
+            pluginRegistry.setImportedPlugin(plugin.id, enabled: enabled)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

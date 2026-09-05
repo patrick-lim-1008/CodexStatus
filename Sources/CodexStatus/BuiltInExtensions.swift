@@ -76,14 +76,28 @@ enum BuiltInPluginFallbacks {
         schemaVersion: 1,
         identifier: BuiltInPluginIdentifiers.progressSidecar,
         name: "Progress Sidecar",
-        version: "1.0.0",
-        minimumHostVersion: "0.3.0",
+        version: "1.1.0",
+        minimumHostVersion: "0.3.2",
         author: "CodexStatus",
         summary: "Shows concise progress through a temporary /side-style conversation.",
         symbolName: "sidebar.right",
         kind: .native,
         entryPoint: "progress-sidecar",
         capabilities: ["readTaskActivity", "createEphemeralSideConversation", "useModelQuota"],
+        permissions: [
+            PluginPermissionDeclaration(
+                identifier: "readTaskActivity",
+                reason: "Read the selected task's local title and observable activity to prepare a progress request."
+            ),
+            PluginPermissionDeclaration(
+                identifier: "createEphemeralSideConversation",
+                reason: "Create a temporary read-only side conversation without changing the source task."
+            ),
+            PluginPermissionDeclaration(
+                identifier: "useModelQuota",
+                reason: "Use Codex model quota whenever a manual or scheduled progress summary is requested."
+            )
+        ],
         privacyDescription: "Creates an ephemeral, read-only fork of the selected task. The summary stays in CodexStatus and does not enter the source conversation. Each refresh uses account quota."
     )
 
@@ -91,14 +105,24 @@ enum BuiltInPluginFallbacks {
         schemaVersion: 1,
         identifier: BuiltInPluginIdentifiers.promptLibrary,
         name: "Prompt & Constraint Library",
-        version: "0.1.0",
-        minimumHostVersion: "0.3.0",
+        version: "0.2.0",
+        minimumHostVersion: "0.3.2",
         author: "CodexStatus",
         summary: "Stores reusable prompts and task constraints in a compact task-row picker.",
         symbolName: "text.badge.plus",
         kind: .resourcePack,
         entryPoint: nil,
         capabilities: ["providePrompts", "writeClipboard", "openCodexTasks"],
+        permissions: [
+            PluginPermissionDeclaration(
+                identifier: "writeClipboard",
+                reason: "Copy the selected prompt and constraints so you can paste them into Codex."
+            ),
+            PluginPermissionDeclaration(
+                identifier: "openCodexTasks",
+                reason: "Bring the exact selected Codex task to the foreground after copying a preset."
+            )
+        ],
         privacyDescription: "Stores custom presets locally. Selecting a preset copies it to the clipboard and opens the chosen task; CodexStatus never sends it automatically."
     )
 }

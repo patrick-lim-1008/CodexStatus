@@ -43,13 +43,25 @@ struct PluginSystemSmoke {
             identifier: "com.example.prompt-pack",
             version: "1.0.0",
             kind: .resourcePack,
-            capabilities: ["providePrompts"]
+            capabilities: ["providePrompts", "writeClipboard"],
+            permissions: [
+                PluginPermissionDeclaration(
+                    identifier: "writeClipboard",
+                    reason: "Copy a selected prompt."
+                )
+            ]
         )
         let importedSource = try makePackage(named: "Prompts", manifest: importedManifest, in: sourceRoot)
         let imported = try registry.importPlugin(from: importedSource)
         try expect(imported.source == .imported, "Valid resource pack should import")
         try expect(!registry.isImportedPluginEnabled(imported.id), "Imported plugin should default disabled")
 
+        registry.setImportedPlugin(imported.id, enabled: true)
+        try expect(
+            !registry.isImportedPluginEnabled(imported.id),
+            "Registry must reject activation before permission preflight"
+        )
+        PluginPermissionLedger(defaults: defaults).grant(imported.manifest)
         registry.setImportedPlugin(imported.id, enabled: true)
         registry = PluginRegistry(
             bundledRoot: bundledRoot,
@@ -58,6 +70,29 @@ struct PluginSystemSmoke {
             defaults: defaults
         )
         try expect(registry.isImportedPluginEnabled(imported.id), "Enabled state should persist")
+
+        let updatedManifest = manifest(
+            identifier: imported.id,
+            version: "1.1.0",
+            kind: .resourcePack,
+            capabilities: ["providePrompts", "writeClipboard"],
+            permissions: [
+                PluginPermissionDeclaration(
+                    identifier: "writeClipboard",
+                    reason: "Copy a selected prompt and its constraints."
+                )
+            ]
+        )
+        let updatedSource = try makePackage(named: "PromptsUpdated", manifest: updatedManifest, in: sourceRoot)
+        let updated = try registry.importPlugin(from: updatedSource)
+        try expect(
+            !registry.isImportedPluginEnabled(updated.id),
+            "A changed permission declaration must disable an updated plugin before it can run"
+        )
+        try expect(
+            registry.permissionBlockedImportedPluginIDs.contains(updated.id),
+            "Updated plugins that were enabled should be queued for permission review"
+        )
 
         let older = manifest(
             identifier: imported.id,
@@ -88,6 +123,50 @@ struct PluginSystemSmoke {
         let futureSource = try makePackage(named: "Future", manifest: incompatible, in: sourceRoot)
         try expectRegistryError(.incompatibleHost("9.0.0")) { try registry.importPlugin(from: futureSource) }
 
+        let unknownPermission = manifest(
+            identifier: "com.example.unknown-permission",
+            version: "1.0.0",
+            kind: .resourcePack,
+            capabilities: ["readEverything"],
+            permissions: [
+                PluginPermissionDeclaration(identifier: "readEverything", reason: "Read everything.")
+            ]
+        )
+        let unknownSource = try makePackage(named: "UnknownPermission", manifest: unknownPermission, in: sourceRoot)
+        try expectRegistryError(.unsupportedPermission("readEverything")) {
+            try registry.importPlugin(from: unknownSource)
+        }
+
+        let mismatchedPermission = manifest(
+            identifier: "com.example.mismatched-permission",
+            version: "1.0.0",
+            kind: .resourcePack,
+            capabilities: ["providePrompts"],
+            permissions: [
+                PluginPermissionDeclaration(identifier: "writeClipboard", reason: "Copy a selected prompt.")
+            ]
+        )
+        let mismatchSource = try makePackage(named: "MismatchedPermission", manifest: mismatchedPermission, in: sourceRoot)
+        try expectRegistryError(.invalidPermissions) { try registry.importPlugin(from: mismatchSource) }
+
+        let legacyJSON = """
+        {
+          "schemaVersion": 1,
+          "identifier": "com.example.legacy-pack",
+          "name": "Legacy Pack",
+          "version": "1.0.0",
+          "minimumHostVersion": "0.2.2",
+          "author": "Tests",
+          "summary": "No permissions field.",
+          "symbolName": "puzzlepiece",
+          "kind": "resourcePack",
+          "capabilities": ["providePrompts"],
+          "privacyDescription": "Test only."
+        }
+        """
+        let legacy = try JSONDecoder().decode(PluginManifest.self, from: Data(legacyJSON.utf8))
+        try expect(legacy.permissions.isEmpty, "Legacy manifests should decode with no permissions")
+
         let executableManifest = manifest(
             identifier: "com.example.executable-pack",
             version: "1.0.0",
@@ -116,6 +195,23 @@ struct PluginSystemSmoke {
         try registry.removePlugin(identifier: imported.id)
         try expect(registry.importedPlugins.isEmpty, "Imported plugin should be removable")
         try expect(!registry.isImportedPluginEnabled(imported.id), "Removal should clear enabled state")
+
+        if let bundledPath = ProcessInfo.processInfo.environment["CODEX_STATUS_VALIDATE_BUNDLED_ROOT"] {
+            let appRegistry = PluginRegistry(
+                bundledRoot: URL(fileURLWithPath: bundledPath, isDirectory: true),
+                installedRoot: root.appendingPathComponent("app-installed", isDirectory: true),
+                hostVersion: "0.3.2",
+                defaults: defaults
+            )
+            try expect(
+                appRegistry.plugin(identifier: "com.codexstatus.progress-sidecar") != nil,
+                "Built app must load the Progress Sidecar manifest"
+            )
+            try expect(
+                appRegistry.plugin(identifier: "com.codexstatus.prompt-library") != nil,
+                "Built app must load the Prompt Library manifest"
+            )
+        }
         print("PluginKit import and security smoke tests passed")
     }
 
@@ -125,7 +221,8 @@ struct PluginSystemSmoke {
         minimumHostVersion: String = "0.2.2",
         kind: PluginKind,
         entryPoint: String? = nil,
-        capabilities: [String]
+        capabilities: [String],
+        permissions: [PluginPermissionDeclaration] = []
     ) -> PluginManifest {
         PluginManifest(
             schemaVersion: 1,
@@ -139,6 +236,7 @@ struct PluginSystemSmoke {
             kind: kind,
             entryPoint: entryPoint,
             capabilities: capabilities,
+            permissions: permissions,
             privacyDescription: "Test data only."
         )
     }
@@ -171,7 +269,9 @@ struct PluginSystemSmoke {
             switch (expected, error) {
             case (.olderVersion, .olderVersion),
                  (.externalNativeCodeNotAllowed, .externalNativeCodeNotAllowed),
-                 (.incompatibleHost, .incompatibleHost): return
+                 (.incompatibleHost, .incompatibleHost),
+                 (.unsupportedPermission, .unsupportedPermission),
+                 (.invalidPermissions, .invalidPermissions): return
             default: throw PluginTestFailure(description: "Unexpected registry error: \(error)")
             }
         }
