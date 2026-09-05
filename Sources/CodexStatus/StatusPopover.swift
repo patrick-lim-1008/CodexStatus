@@ -3,6 +3,8 @@ import SwiftUI
 
 struct StatusPopover: View {
     @ObservedObject var model: StatusModel
+    @ObservedObject var preferences: AppPreferences
+    let onOpenSettings: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,6 +40,7 @@ struct StatusPopover: View {
         Button { model.openThread(task.id) } label: {
             TaskRow(
                 task: task,
+                showsProjectName: preferences.showProjectNames,
                 isProjectHovering: model.hoveredProjectTaskID == task.id,
                 onProjectHoverChanged: { hovering in
                     if hovering {
@@ -50,7 +53,7 @@ struct StatusPopover: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            if hovering && task.status == .done {
+            if hovering && task.status == .done && preferences.completionReadMode == .hover {
                 model.acknowledgeCompletion(for: task.id)
             }
         }
@@ -89,7 +92,7 @@ struct StatusPopover: View {
                         HStack(spacing: 5) {
                             Text("Codex").font(.headline)
                             Circle()
-                                .fill(model.hooksInstalled ? Color.green : Color.secondary)
+                                .fill(model.isConnected ? Color.green : Color.secondary)
                                 .frame(width: 5, height: 5)
                         }
                         Text(summaryText).font(.caption).foregroundStyle(.secondary)
@@ -110,15 +113,26 @@ struct StatusPopover: View {
             .buttonStyle(.plain)
             .help("Refresh activity and usage")
 
-            Spacer(minLength: 4)
-            UsageSummaryView(
-                weeklyWindow: model.weeklyUsageWindow,
-                fiveHourWindow: model.fiveHourUsageWindow,
-                singleWindow: model.singleUsageWindow,
-                updatedAt: model.usageUpdatedAt,
-                isHovering: model.isUsageHovering,
-                onHoverChanged: { model.isUsageHovering = $0 }
-            )
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 13, height: 16)
+            }
+            .buttonStyle(.plain)
+            .help("Open CodexStatus Settings")
+
+            Spacer(minLength: 3)
+            if preferences.usageEnabled {
+                UsageSummaryView(
+                    weeklyWindow: model.weeklyUsageWindow,
+                    fiveHourWindow: model.fiveHourUsageWindow,
+                    singleWindow: model.singleUsageWindow,
+                    updatedAt: model.usageUpdatedAt,
+                    isHovering: model.isUsageHovering,
+                    onHoverChanged: { model.isUsageHovering = $0 }
+                )
+            }
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 9)
@@ -130,7 +144,7 @@ struct StatusPopover: View {
             Image(systemName: "circle.dotted")
                 .font(.system(size: 20))
                 .foregroundStyle(.tertiary)
-            Text(model.hooksInstalled ? "Start a Codex task to see it here" : "Connect Codex to show live tasks")
+            Text(model.isConnected ? "Start a Codex task to see it here" : "Open Codex to show live tasks")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -373,6 +387,7 @@ private struct UsageBar: View {
 
 private struct TaskRow: View {
     let task: AgentTask
+    let showsProjectName: Bool
     let isProjectHovering: Bool
     let onProjectHoverChanged: (Bool) -> Void
 
@@ -386,7 +401,7 @@ private struct TaskRow: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    if let projectName = task.projectName {
+                    if showsProjectName, let projectName = task.projectName {
                         Text(projectName)
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)

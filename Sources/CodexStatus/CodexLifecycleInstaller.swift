@@ -23,6 +23,27 @@ struct CodexLifecycleInstaller {
             .appendingPathComponent("\(label).plist")
     }
 
+    private var serviceTarget: String {
+        "gui/\(getuid())/\(label)"
+    }
+
+    var isInstalled: Bool {
+        guard fileManager.isExecutableFile(atPath: installedWatcherURL.path),
+              let plistData = try? Data(contentsOf: launchAgentURL),
+              let plist = try? PropertyListSerialization.propertyList(
+                from: plistData,
+                options: [],
+                format: nil
+              ) as? [String: Any],
+              plist["Label"] as? String == label,
+              let arguments = plist["ProgramArguments"] as? [String],
+              arguments.first == installedWatcherURL.path,
+              let targetPath = try? String(contentsOf: targetPathURL, encoding: .utf8),
+              !targetPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return false }
+        return true
+    }
+
     func install() throws {
         try fileManager.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: launchAgentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -67,23 +88,50 @@ struct CodexLifecycleInstaller {
         }
 
         if needsRestart {
+            bootoutAgent()
             bootstrapOrRestartAgent()
+        } else if !isAgentLoaded {
+            bootstrapOrRestartAgent()
+        }
+    }
+
+    func uninstall() throws {
+        bootoutAgent()
+
+        for url in [launchAgentURL, installedWatcherURL, targetPathURL] {
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+            }
         }
     }
 
     private func bootstrapOrRestartAgent() {
         let domain = "gui/\(getuid())"
         runLaunchctl(["bootstrap", domain, launchAgentURL.path])
-        runLaunchctl(["kickstart", "-k", "\(domain)/\(label)"])
+        runLaunchctl(["kickstart", "-k", serviceTarget])
     }
 
-    private func runLaunchctl(_ arguments: [String]) {
+    private var isAgentLoaded: Bool {
+        runLaunchctl(["print", serviceTarget]) == 0
+    }
+
+    private func bootoutAgent() {
+        runLaunchctl(["bootout", serviceTarget])
+    }
+
+    @discardableResult
+    private func runLaunchctl(_ arguments: [String]) -> Int32? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        } catch {
+            return nil
+        }
     }
 }

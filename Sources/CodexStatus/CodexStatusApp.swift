@@ -15,22 +15,52 @@ struct CodexStatusApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
-    private let model = StatusModel()
+    private let preferences: AppPreferences
+    private let model: StatusModel
+    private let lifecycleInstaller = CodexLifecycleInstaller()
     private let statusItem = NSStatusBar.system.statusItem(withLength: 34)
     private let popover = NSPopover()
     private var modelObserver: AnyCancellable?
+    private var preferenceObservers = Set<AnyCancellable>()
+    private var taskObserver: AnyCancellable?
     private var statusCycleTimer: Timer?
     private var statusCycleIndex = 0
 
+    private lazy var notificationController = StatusNotificationController { [weak self] threadID in
+        self?.model.openThread(threadID)
+    }
+
+    private lazy var settingsWindowController = SettingsWindowController(
+        preferences: preferences,
+        model: model,
+        onOpenDataFolder: { [weak self] in self?.openDataFolder() },
+        onRemoveAllIntegrations: { [weak self] in self?.removeAllIntegrations() }
+    )
+
+    override init() {
+        let existingHooksInstalled = CodexIntegrationInstaller().isInstalled
+        let existingLifecycleInstalled = CodexLifecycleInstaller().isInstalled
+        let preferences = AppPreferences(
+            existingHooksInstalled: existingHooksInstalled,
+            existingLifecycleInstalled: existingLifecycleInstalled
+        )
+        self.preferences = preferences
+        model = StatusModel(preferences: preferences)
+        super.init()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
-        try? CodexLifecycleInstaller().install()
 
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
         popover.contentSize = NSSize(width: 224, height: 125)
-        popover.contentViewController = NSHostingController(rootView: StatusPopover(model: model))
+        popover.contentViewController = NSHostingController(rootView: StatusPopover(
+            model: model,
+            preferences: preferences,
+            onOpenSettings: { [weak self] in self?.openSettings() }
+        ))
 
         guard let button = statusItem.button else { return }
         button.target = self
@@ -43,6 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             DispatchQueue.main.async {
                 self?.updateStatusItem()
             }
+        }
+        observePreferences()
+        taskObserver = model.$tasks.sink { [weak self] tasks in
+            self?.notificationController.process(tasks: tasks)
         }
         statusCycleTimer = Timer.scheduledTimer(withTimeInterval: 1.3, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -57,6 +91,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
+
+        if NSApplication.shared.currentEvent?.type == .rightMouseUp {
+            showContextMenu(relativeTo: button)
+            return
+        }
 
         if popover.isShown {
             popover.performClose(nil)
@@ -77,19 +116,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard let button = statusItem.button else { return }
         updatePopoverSize()
         let status = displayedStatus
-        let count = model.tasks.filter { $0.status == status }.count
+        let count = preferences.showMenuBarCount
+            ? model.tasks.filter { $0.status == status }.count
+            : 0
         button.image = statusImage(status: status, count: count)
         button.toolTip = model.summaryAccessibilityLabel
         button.setAccessibilityLabel(model.summaryAccessibilityLabel)
     }
 
     private var displayedStatus: AgentStatus {
+        guard preferences.cycleStatusColors else { return model.summaryStatus }
         let activeStatuses = model.activeStatuses
         guard !activeStatuses.isEmpty else { return .idle }
         return activeStatuses[statusCycleIndex % activeStatuses.count]
     }
 
     private func advanceStatusCycle() {
+        guard preferences.cycleStatusColors else {
+            statusCycleIndex = 0
+            return
+        }
         let activeStatuses = model.activeStatuses
         guard activeStatuses.count > 1 else {
             statusCycleIndex = 0
@@ -118,6 +164,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             )
         }
         popover.contentSize = NSSize(width: 224, height: height)
+    }
+
+    private func observePreferences() {
+        preferences.objectWillChange
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.updateStatusItem()
+                }
+            }
+            .store(in: &preferenceObservers)
+
+        preferences.$followCodexLifecycle
+            .removeDuplicates()
+            .sink { [weak self] enabled in
+                self?.applyLifecyclePreference(enabled)
+            }
+            .store(in: &preferenceObservers)
+
+        preferences.$notificationsEnabled
+            .combineLatest(preferences.$notificationSoundEnabled)
+            .sink { [weak self] enabled, soundEnabled in
+                self?.notificationController.setEnabled(enabled, soundEnabled: soundEnabled)
+            }
+            .store(in: &preferenceObservers)
+    }
+
+    private func applyLifecyclePreference(_ enabled: Bool) {
+        do {
+            if enabled {
+                try lifecycleInstaller.install()
+            } else {
+                try lifecycleInstaller.uninstall()
+            }
+        } catch {
+            NSLog("CodexStatus lifecycle update failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func showContextMenu(relativeTo button: NSStatusBarButton) {
+        let menu = NSMenu()
+        let refreshItem = NSMenuItem(
+            title: "Refresh",
+            action: #selector(refreshFromMenu),
+            keyEquivalent: ""
+        )
+        refreshItem.target = self
+        menu.addItem(refreshItem)
+
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: button.bounds.height + 2),
+            in: button
+        )
+    }
+
+    @objc private func refreshFromMenu() {
+        model.refreshAll()
+    }
+
+    @objc private func openSettings() {
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.settingsWindowController.present()
+        }
+    }
+
+    private func openDataFolder() {
+        let folder = CodexIntegrationInstaller().supportDirectory
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(folder)
+    }
+
+    private func removeAllIntegrations() {
+        preferences.enhancedActivityEnabled = false
+        preferences.followCodexLifecycle = false
+        model.removeIntegration()
+        try? lifecycleInstaller.uninstall()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     private func statusImage(status: AgentStatus, count: Int) -> NSImage {

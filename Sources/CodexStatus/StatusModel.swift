@@ -48,7 +48,7 @@ enum AgentStatus: Int, CaseIterable, Identifiable, Comparable {
     }
 }
 
-struct AgentTask: Identifiable {
+struct AgentTask: Identifiable, Equatable {
     var id: String
     var name: String
     var detail: String
@@ -98,6 +98,7 @@ final class StatusModel: ObservableObject {
 
     @Published private(set) var tasks: [AgentTask] = []
     @Published private(set) var hooksInstalled = false
+    @Published private(set) var appServerConnected = false
     @Published private(set) var connectionMessage = "Checking Codex connection…"
     @Published var showsIdleTasks = false
     @Published var isUsageHovering = false
@@ -106,6 +107,7 @@ final class StatusModel: ObservableObject {
     @Published private(set) var usageUpdatedAt: Date?
 
     private let installer = CodexIntegrationInstaller()
+    private let preferences: AppPreferences
     private var refreshTimer: Timer?
     private var scanTimer: Timer?
     private var scannerProcess: Process?
@@ -113,11 +115,13 @@ final class StatusModel: ObservableObject {
     private var lastUsageScan: Date?
     private let doneTrackingStartedAt: TimeInterval
     private var acknowledgedCompletions: [String: Double]
+    private var preferenceObservers = Set<AnyCancellable>()
 
     private static let doneTrackingStartedAtKey = "doneTrackingStartedAt.v1"
     private static let acknowledgedCompletionsKey = "acknowledgedCompletions.v1"
 
-    init() {
+    init(preferences: AppPreferences) {
+        self.preferences = preferences
         let defaults = UserDefaults.standard
         if let storedStart = defaults.object(forKey: Self.doneTrackingStartedAtKey) as? NSNumber {
             doneTrackingStartedAt = storedStart.doubleValue
@@ -128,15 +132,9 @@ final class StatusModel: ObservableObject {
         acknowledgedCompletions = defaults.dictionary(forKey: Self.acknowledgedCompletionsKey)?
             .compactMapValues { ($0 as? NSNumber)?.doubleValue } ?? [:]
 
-        installer.prepareSupportDirectory()
-        if !installer.isInstalled {
-            do {
-                try installer.install()
-            } catch {
-                connectionMessage = "Could not connect: \(error.localizedDescription)"
-            }
-        }
+        applyEnhancedActivityPreference(preferences.enhancedActivityEnabled)
         hooksInstalled = installer.isInstalled
+        observePreferences()
         refresh()
         scanExistingThreads()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -149,6 +147,10 @@ final class StatusModel: ObservableObject {
 
     var summaryStatus: AgentStatus {
         tasks.map(\.status).max() ?? .idle
+    }
+
+    var isConnected: Bool {
+        appServerConnected || hooksInstalled
     }
 
     var summaryCount: Int {
@@ -170,11 +172,13 @@ final class StatusModel: ObservableObject {
     }
 
     var prominentTasks: [AgentTask] {
-        tasks.filter { $0.status != .idle || $0.isRecentlyCompleted }
+        guard preferences.foldIdleTasks else { return tasks }
+        return tasks.filter { $0.status != .idle || $0.isRecentlyCompleted }
     }
 
     var foldedIdleTasks: [AgentTask] {
-        tasks.filter { $0.status == .idle && !$0.isRecentlyCompleted }
+        guard preferences.foldIdleTasks else { return [] }
+        return tasks.filter { $0.status == .idle && !$0.isRecentlyCompleted }
     }
 
     var visibleTaskRowCount: Int {
@@ -201,11 +205,16 @@ final class StatusModel: ObservableObject {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let now = Date()
-        let urls = (try? FileManager.default.contentsOfDirectory(
-            at: installer.sessionsDirectory,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )) ?? []
+        let urls: [URL]
+        if preferences.enhancedActivityEnabled {
+            urls = (try? FileManager.default.contentsOfDirectory(
+                at: installer.sessionsDirectory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        } else {
+            urls = []
+        }
 
         let hookTasks = urls.compactMap { url -> AgentTask? in
             guard url.pathExtension == "json",
@@ -279,27 +288,43 @@ final class StatusModel: ObservableObject {
             .prefix(6)
             .map { $0 }
 
-        if !hooksInstalled {
-            connectionMessage = "Codex hooks not installed"
-        } else if tasks.isEmpty {
-            connectionMessage = "Hooks ready · start a new Codex task"
+        if appServerConnected, hooksInstalled {
+            connectionMessage = tasks.isEmpty ? "Connected · waiting for a task" : "Live Codex activity"
+        } else if appServerConnected {
+            connectionMessage = tasks.isEmpty ? "Connected · waiting for a task" : "Codex activity"
+        } else if hooksInstalled {
+            connectionMessage = "Enhanced Activity ready"
         } else {
-            connectionMessage = "Live Codex activity"
+            connectionMessage = "Waiting for Codex"
         }
     }
 
     func refreshAll() {
+        lastUsageScan = nil
         refresh()
         scanExistingThreads()
     }
 
     func installIntegration() {
+        preferences.enhancedActivityEnabled = true
         do {
             try installer.install()
             connectionMessage = "Connected · approve hooks in Codex if prompted"
             refresh()
         } catch {
             connectionMessage = "Could not connect: \(error.localizedDescription)"
+        }
+    }
+
+    func removeIntegration() {
+        preferences.enhancedActivityEnabled = false
+        do {
+            try installer.uninstall()
+            hooksInstalled = false
+            connectionMessage = appServerConnected ? "Connected to Codex" : "Waiting for Codex"
+            refresh()
+        } catch {
+            connectionMessage = "Could not remove integration: \(error.localizedDescription)"
         }
     }
 
@@ -340,7 +365,8 @@ final class StatusModel: ObservableObject {
         process.executableURL = scannerURL
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
-        let shouldLoadUsage = lastUsageScan.map { Date().timeIntervalSince($0) >= 60 } ?? true
+        let shouldLoadUsage = preferences.usageEnabled
+            && (lastUsageScan.map { Date().timeIntervalSince($0) >= 60 } ?? true)
         if shouldLoadUsage {
             var environment = ProcessInfo.processInfo.environment
             environment["CODEX_STATUS_INCLUDE_USAGE"] = "1"
@@ -354,8 +380,15 @@ final class StatusModel: ObservableObject {
             let result = try? JSONDecoder().decode(ScanResult.self, from: data)
             Task { @MainActor in
                 guard let self else { return }
-                self.discoveredTasks = self.mapDiscoveredThreads(result?.threads ?? [])
-                if let windows = result?.usageWindows {
+                guard let result else {
+                    self.appServerConnected = false
+                    self.scannerProcess = nil
+                    self.refresh()
+                    return
+                }
+                self.appServerConnected = true
+                self.discoveredTasks = self.mapDiscoveredThreads(result.threads)
+                if self.preferences.usageEnabled, let windows = result.usageWindows {
                     self.usageWindows = windows
                     self.usageUpdatedAt = Date()
                 }
@@ -368,6 +401,48 @@ final class StatusModel: ObservableObject {
             try process.run()
         } catch {
             scannerProcess = nil
+        }
+    }
+
+    private func observePreferences() {
+        preferences.$enhancedActivityEnabled
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] enabled in
+                self?.applyEnhancedActivityPreference(enabled)
+                self?.refresh()
+            }
+            .store(in: &preferenceObservers)
+
+        preferences.$usageEnabled
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] enabled in
+                guard let self else { return }
+                if enabled {
+                    self.lastUsageScan = nil
+                    self.scanExistingThreads()
+                } else {
+                    self.usageWindows = []
+                    self.usageUpdatedAt = nil
+                }
+            }
+            .store(in: &preferenceObservers)
+    }
+
+    private func applyEnhancedActivityPreference(_ enabled: Bool) {
+        do {
+            if enabled {
+                try installer.install()
+            } else {
+                try installer.uninstall()
+            }
+            hooksInstalled = installer.isInstalled
+        } catch {
+            hooksInstalled = installer.isInstalled
+            connectionMessage = enabled
+                ? "Could not enable Enhanced Activity: \(error.localizedDescription)"
+                : "Could not disable Enhanced Activity: \(error.localizedDescription)"
         }
     }
 
@@ -396,7 +471,9 @@ final class StatusModel: ObservableObject {
                 completionAt = completedAt
                 if isUnacknowledgedCompletion(taskID: row.id, completedAt: completedAt) {
                     status = .done
-                    detail = "Completed · click to view"
+                    detail = preferences.completionReadMode == .hover
+                        ? "Completed · unread (hover to mark read)"
+                        : "Completed · unread"
                     isRecentlyCompleted = true
                 } else {
                     status = .idle
