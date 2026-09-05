@@ -1,27 +1,38 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @ObservedObject var preferences: AppPreferences
+    @ObservedObject var pluginRegistry: PluginRegistry
     @ObservedObject var model: StatusModel
+    @ObservedObject var updateChecker: AppUpdateChecker
+    @ObservedObject var notificationController: StatusNotificationController
+    @ObservedObject var lifecycleController: LifecycleController
     @ObservedObject private var viewState: SettingsViewState
 
     let onOpenDataFolder: () -> Void
     let onRemoveAllIntegrations: () -> Void
-    let onSendTestNotification: (AgentStatus) -> Void
 
     init(
         preferences: AppPreferences,
+        pluginRegistry: PluginRegistry,
         model: StatusModel,
+        updateChecker: AppUpdateChecker,
+        notificationController: StatusNotificationController,
+        lifecycleController: LifecycleController,
         onOpenDataFolder: @escaping () -> Void,
-        onRemoveAllIntegrations: @escaping () -> Void,
-        onSendTestNotification: @escaping (AgentStatus) -> Void
+        onRemoveAllIntegrations: @escaping () -> Void
     ) {
         self.preferences = preferences
+        self.pluginRegistry = pluginRegistry
         self.model = model
+        self.updateChecker = updateChecker
+        self.notificationController = notificationController
+        self.lifecycleController = lifecycleController
         viewState = SettingsViewState()
         self.onOpenDataFolder = onOpenDataFolder
         self.onRemoveAllIntegrations = onRemoveAllIntegrations
-        self.onSendTestNotification = onSendTestNotification
     }
 
     var body: some View {
@@ -56,6 +67,26 @@ struct SettingsView: View {
         } message: {
             Text("This removes CodexStatus hooks and its background lifecycle helper. Your settings and task data are kept.")
         }
+        .alert(item: $viewState.pluginAlert) { alert in
+            switch alert {
+            case .message(let title, let detail):
+                Alert(
+                    title: Text(title),
+                    message: Text(detail),
+                    dismissButton: .default(Text("OK"))
+                )
+            case .remove(let plugin):
+                Alert(
+                    title: Text("Remove \(plugin.manifest.name)?"),
+                    message: Text("This removes the imported plugin package from CodexStatus."),
+                    primaryButton: .destructive(Text("Remove")) {
+                        removeImportedPlugin(plugin)
+                    },
+                    secondaryButton: .cancel()
+                )
+            }
+        }
+        .preferredColorScheme(preferences.appTheme.colorScheme)
     }
 
     private var paneTitle: some View {
@@ -84,14 +115,6 @@ struct SettingsView: View {
 
     private var generalSection: some View {
         SettingsSection(title: "General", symbolName: "gearshape") {
-            PreferenceToggle(
-                title: "Follow Codex lifecycle",
-                detail: "Open CodexStatus when Codex starts and close it when Codex quits.",
-                isOn: $preferences.followCodexLifecycle
-            )
-
-            Divider()
-
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Mark completed tasks as read")
@@ -114,6 +137,33 @@ struct SettingsView: View {
 
     private var appearanceSection: some View {
         SettingsSection(title: "Appearance", symbolName: "paintbrush") {
+            HStack(alignment: .top, spacing: 18) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("Theme")
+                        Text("Built in · Optional")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(.quaternary, in: Capsule())
+                    }
+                    Text("Use the system appearance or keep CodexStatus light or dark.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                Picker("Theme", selection: $preferences.appTheme) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Text(theme.title).tag(theme)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 118)
+            }
+
+            Divider()
+
             PreferenceToggle(
                 title: "Show project names",
                 detail: "Display the project suffix beside each task when available.",
@@ -141,35 +191,262 @@ struct SettingsView: View {
     }
 
     private var extensionsSection: some View {
-        SettingsSection(title: "Extensions", symbolName: "puzzlepiece.extension") {
-            ExtensionRow(
-                descriptor: BuiltInExtensions.usageMeter,
-                isOn: $preferences.usageEnabled,
-                statusText: model.usageUpdatedAt == nil ? "Waiting for usage data" : "Usage data available"
-            )
+        VStack(alignment: .leading, spacing: 18) {
+            SettingsSection(title: "Built in · Default on", symbolName: "checkmark.seal") {
+                Text("Essential status and navigation stay part of the app. They work immediately and do not depend on plugins.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            Divider()
+                Divider()
 
-            ExtensionRow(
-                descriptor: BuiltInExtensions.enhancedActivity,
-                isOn: $preferences.enhancedActivityEnabled,
-                statusText: model.hooksInstalled ? "Hooks installed" : "Hooks not installed"
-            )
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                ExtensionRow(
-                    descriptor: BuiltInExtensions.macOSNotifications,
-                    isOn: $preferences.notificationsEnabled,
-                    statusText: preferences.notificationsEnabled ? "Enabled" : "Off"
+                BuiltInFeatureRow(
+                    descriptor: BuiltInFeatures.coreStatus,
+                    isOn: .constant(true),
+                    statusText: model.connectionMessage,
+                    allowsToggle: false
                 )
 
-                if preferences.notificationsEnabled {
-                    Divider().padding(.leading, 38)
-                    notificationControls
-                        .padding(.leading, 38)
+                Divider()
+
+                BuiltInFeatureRow(
+                    descriptor: BuiltInFeatures.usageMeter,
+                    isOn: $preferences.usageEnabled,
+                    statusText: model.usageUpdatedAt == nil ? "Waiting for usage data" : "Usage data available"
+                )
+            }
+
+            SettingsSection(title: "Built in · Optional", symbolName: "switch.2") {
+                Text("These features ship with CodexStatus but stay off until you choose them because they add alerts or install local integrations.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                BuiltInFeatureRow(
+                    descriptor: BuiltInFeatures.enhancedActivity,
+                    isOn: $preferences.enhancedActivityEnabled,
+                    statusText: model.hooksInstalled ? "Hooks installed" : "Hooks not installed"
+                )
+
+                Divider()
+
+                BuiltInFeatureRow(
+                    descriptor: BuiltInFeatures.codexLifecycle,
+                    isOn: $preferences.followCodexLifecycle,
+                    statusText: lifecycleController.statusText
+                )
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    BuiltInFeatureRow(
+                        descriptor: BuiltInFeatures.macOSNotifications,
+                        isOn: $preferences.notificationsEnabled,
+                        statusText: notificationController.statusText
+                    )
+
+                    if preferences.notificationsEnabled {
+                        Divider().padding(.leading, 38)
+                        notificationControls
+                            .padding(.leading, 38)
+                    }
                 }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    BuiltInFeatureRow(
+                        descriptor: BuiltInFeatures.updateChecks,
+                        isOn: $preferences.updateChecksEnabled,
+                        statusText: updateChecker.state.statusText
+                    )
+
+                    if preferences.updateChecksEnabled {
+                        HStack(spacing: 10) {
+                            Button("Check Now") {
+                                updateChecker.checkNow()
+                            }
+                            .controlSize(.small)
+                            .disabled(updateChecker.state == .checking)
+
+                            if let update = updateChecker.state.availableUpdate {
+                                Link("View \(update.version)", destination: update.releaseURL)
+                                    .font(.caption)
+                            }
+                            Spacer()
+                        }
+                        .padding(.leading, 38)
+                    }
+                }
+            }
+
+            SettingsSection(title: "Plugins", symbolName: "puzzlepiece.extension") {
+                HStack(alignment: .center, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Independent capabilities can be installed and updated separately. Imported resource packs never execute third-party code.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(".codexstatusplugin · schema 1")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 12)
+                    Button("Folder") {
+                        openPluginsFolder()
+                    }
+                    Button("Import…") {
+                        choosePluginToImport()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    PluginRow(
+                        descriptor: manifest(
+                            BuiltInPluginIdentifiers.progressSidecar,
+                            fallback: BuiltInPluginFallbacks.progressSidecar
+                        ),
+                        source: .bundled,
+                        isOn: $preferences.progressSidecarEnabled,
+                        statusText: preferences.progressSidecarEnabled ? preferences.progressRefreshInterval.title : "Off"
+                    )
+
+                    if preferences.progressSidecarEnabled {
+                        Divider().padding(.leading, 38)
+                        progressSidecarControls
+                            .padding(.leading, 38)
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Imported Resource Packs")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    if pluginRegistry.importedPlugins.isEmpty {
+                        Text("No imported plugins. Resource packs are validated and installed disabled.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        ForEach(Array(pluginRegistry.importedPlugins.enumerated()), id: \.element.id) { index, plugin in
+                            if index > 0 { Divider() }
+                            PluginRow(
+                                descriptor: plugin.manifest,
+                                source: .imported,
+                                isOn: importedPluginBinding(plugin.id),
+                                statusText: pluginRegistry.isImportedPluginEnabled(plugin.id) ? "Enabled" : "Installed · disabled",
+                                onRemove: { viewState.pluginAlert = .remove(plugin) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func manifest(_ identifier: String, fallback: PluginManifest) -> PluginManifest {
+        pluginRegistry.plugin(identifier: identifier)?.manifest ?? fallback
+    }
+
+    private func importedPluginBinding(_ identifier: String) -> Binding<Bool> {
+        Binding(
+            get: { pluginRegistry.isImportedPluginEnabled(identifier) },
+            set: { pluginRegistry.setImportedPlugin(identifier, enabled: $0) }
+        )
+    }
+
+    private func choosePluginToImport() {
+        let panel = NSOpenPanel()
+        panel.title = "Import CodexStatus Plugin"
+        panel.message = "Choose a .codexstatusplugin resource-pack folder. Imported code is not allowed."
+        panel.prompt = "Import"
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = false
+        if let pluginType = UTType(filenameExtension: "codexstatusplugin") {
+            panel.allowedContentTypes = [pluginType]
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let plugin = try pluginRegistry.importPlugin(from: url)
+            viewState.pluginAlert = .message(
+                title: "Plugin Imported",
+                detail: "\(plugin.manifest.name) \(plugin.manifest.version) was installed disabled. Review its capabilities before enabling it."
+            )
+        } catch {
+            viewState.pluginAlert = .message(
+                title: "Plugin Was Not Imported",
+                detail: error.localizedDescription
+            )
+        }
+    }
+
+    private func openPluginsFolder() {
+        do {
+            try pluginRegistry.prepareInstalledPluginsDirectory()
+            NSWorkspace.shared.open(pluginRegistry.installedPluginsDirectory)
+        } catch {
+            viewState.pluginAlert = .message(title: "Plugins Folder Unavailable", detail: error.localizedDescription)
+        }
+    }
+
+    private func removeImportedPlugin(_ plugin: InstalledPlugin) {
+        do {
+            try pluginRegistry.removePlugin(identifier: plugin.id)
+        } catch {
+            viewState.pluginAlert = .message(title: "Plugin Was Not Removed", detail: error.localizedDescription)
+        }
+    }
+
+    private var progressSidecarControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Automatic updates")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("Automatic updates", selection: $preferences.progressRefreshInterval) {
+                    ForEach(ProgressRefreshInterval.allCases) { interval in
+                        Text(interval.title).tag(interval)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 132)
+            }
+
+            Text("Progress prompt")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: $preferences.progressSidecarPrompt)
+                .font(.system(size: 11))
+                .frame(minHeight: 58, maxHeight: 78)
+                .padding(5)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
+                }
+
+            HStack(alignment: .firstTextBaseline) {
+                Text("Manual and automatic updates run in an ephemeral read-only side conversation. They do not change the source task, but each update uses account quota.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("Reset Prompt") {
+                    preferences.progressSidecarPrompt = AppPreferences.defaultProgressSidecarPrompt
+                }
+                .controlSize(.small)
             }
         }
     }
@@ -187,7 +464,7 @@ struct SettingsView: View {
                 status: .done,
                 isEnabled: $preferences.notifyOnCompletion,
                 sound: $preferences.completionNotificationSound,
-                onTest: { onSendTestNotification(.done) }
+                onTest: { notificationController.sendTestNotification(for: .done) }
             )
 
             Divider()
@@ -198,7 +475,7 @@ struct SettingsView: View {
                 status: .needsAttention,
                 isEnabled: $preferences.notifyOnAttention,
                 sound: $preferences.attentionNotificationSound,
-                onTest: { onSendTestNotification(.needsAttention) }
+                onTest: { notificationController.sendTestNotification(for: .needsAttention) }
             )
 
             Divider()
@@ -209,7 +486,7 @@ struct SettingsView: View {
                 status: .error,
                 isEnabled: $preferences.notifyOnError,
                 sound: $preferences.errorNotificationSound,
-                onTest: { onSendTestNotification(.error) }
+                onTest: { notificationController.sendTestNotification(for: .error) }
             )
 
             Divider()
@@ -303,7 +580,7 @@ struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "0.2.2"
+        return version ?? "0.3.0"
     }
 
     private static let repositoryURL = URL(string: "https://github.com/patrick-lim-1008/CodexStatus")!
@@ -313,6 +590,19 @@ struct SettingsView: View {
 private final class SettingsViewState: ObservableObject {
     @Published var selectedPane: SettingsPane? = .extensions
     @Published var isConfirmingIntegrationRemoval = false
+    @Published var pluginAlert: PluginAlert?
+}
+
+private enum PluginAlert: Identifiable {
+    case message(title: String, detail: String)
+    case remove(InstalledPlugin)
+
+    var id: String {
+        switch self {
+        case .message(let title, let detail): "message-\(title)-\(detail)"
+        case .remove(let plugin): "remove-\(plugin.id)"
+        }
+    }
 }
 
 private enum SettingsPane: String, CaseIterable, Identifiable {
@@ -435,14 +725,64 @@ private struct NotificationRuleRow: View {
     }
 }
 
-private struct ExtensionRow: View {
-    let descriptor: BuiltInExtensionDescriptor
+private struct BuiltInFeatureRow: View {
+    let descriptor: BuiltInFeatureDescriptor
     @Binding var isOn: Bool
     let statusText: String
+    var allowsToggle = true
+
+    var body: some View {
+        ExtensionPresentationRow(
+            name: descriptor.name,
+            summary: descriptor.summary,
+            symbolName: descriptor.symbolName,
+            badge: descriptor.availability,
+            capabilities: descriptor.capabilities,
+            privacyDescription: descriptor.privacyDescription,
+            isOn: $isOn,
+            statusText: statusText,
+            allowsToggle: allowsToggle
+        )
+    }
+}
+
+private struct PluginRow: View {
+    let descriptor: PluginManifest
+    let source: PluginSource
+    @Binding var isOn: Bool
+    let statusText: String
+    var onRemove: (() -> Void)? = nil
+
+    var body: some View {
+        ExtensionPresentationRow(
+            name: descriptor.name,
+            summary: descriptor.summary,
+            symbolName: descriptor.symbolName,
+            badge: source.rawValue,
+            capabilities: descriptor.capabilities,
+            privacyDescription: descriptor.privacyDescription,
+            isOn: $isOn,
+            statusText: statusText,
+            onRemove: onRemove
+        )
+    }
+}
+
+private struct ExtensionPresentationRow: View {
+    let name: String
+    let summary: String
+    let symbolName: String
+    let badge: String
+    let capabilities: [String]
+    let privacyDescription: String
+    @Binding var isOn: Bool
+    let statusText: String
+    var allowsToggle = true
+    var onRemove: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 11) {
-            Image(systemName: descriptor.symbolName)
+            Image(systemName: symbolName)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.tint)
                 .frame(width: 26, height: 26)
@@ -450,20 +790,20 @@ private struct ExtensionRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(descriptor.name)
+                    Text(name)
                         .fontWeight(.medium)
-                    Text("Built-in")
+                    Text(badge)
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(.quaternary, in: Capsule())
                 }
-                Text(descriptor.summary)
+                Text(summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(descriptor.capabilities.map(\.title).joined(separator: " · "))
+                Text(capabilities.map { PluginCapabilityLabels.title(for: $0) }.joined(separator: " · "))
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -474,10 +814,24 @@ private struct ExtensionRow: View {
 
             Spacer(minLength: 12)
 
-            Toggle(descriptor.name, isOn: $isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
+            VStack(alignment: .trailing, spacing: 7) {
+                if allowsToggle {
+                    Toggle(name, isOn: $isOn)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.system(size: 16, weight: .semibold))
+                        .help("Always available")
+                }
+                if let onRemove {
+                    Button("Remove", role: .destructive, action: onRemove)
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+            }
         }
-        .help(descriptor.privacySummary)
+        .help(privacyDescription)
     }
 }

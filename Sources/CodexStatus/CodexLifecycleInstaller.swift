@@ -1,11 +1,33 @@
 import Foundation
 
 struct CodexLifecycleInstaller {
-    private let fileManager = FileManager.default
+    private let fileManager: FileManager
     private let label = "com.local.CodexStatusWatcher"
+    private let supportDirectoryOverride: URL?
+    private let launchAgentsDirectoryOverride: URL?
+    private let bundleURL: URL
+    private let serviceUID: uid_t
+    private let launchctlRunner: (([String]) -> Int32?)?
+
+    init(
+        fileManager: FileManager = .default,
+        supportDirectory: URL? = nil,
+        launchAgentsDirectory: URL? = nil,
+        bundleURL: URL = Bundle.main.bundleURL,
+        serviceUID: uid_t = getuid(),
+        launchctlRunner: (([String]) -> Int32?)? = nil
+    ) {
+        self.fileManager = fileManager
+        supportDirectoryOverride = supportDirectory
+        launchAgentsDirectoryOverride = launchAgentsDirectory
+        self.bundleURL = bundleURL
+        self.serviceUID = serviceUID
+        self.launchctlRunner = launchctlRunner
+    }
 
     private var supportDirectory: URL {
-        fileManager.homeDirectoryForCurrentUser
+        if let supportDirectoryOverride { return supportDirectoryOverride }
+        return fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/CodexStatus", isDirectory: true)
     }
 
@@ -18,13 +40,15 @@ struct CodexLifecycleInstaller {
     }
 
     private var launchAgentURL: URL {
-        fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        let directory = launchAgentsDirectoryOverride
+            ?? fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        return directory
             .appendingPathComponent("\(label).plist")
     }
 
     private var serviceTarget: String {
-        "gui/\(getuid())/\(label)"
+        "gui/\(serviceUID)/\(label)"
     }
 
     var isInstalled: Bool {
@@ -48,7 +72,7 @@ struct CodexLifecycleInstaller {
         try fileManager.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: launchAgentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-        let bundledWatcher = Bundle.main.bundleURL
+        let bundledWatcher = bundleURL
             .appendingPathComponent("Contents/Helpers/CodexStatusWatcher")
         guard fileManager.fileExists(atPath: bundledWatcher.path) else { return }
 
@@ -106,7 +130,7 @@ struct CodexLifecycleInstaller {
     }
 
     private func bootstrapOrRestartAgent() {
-        let domain = "gui/\(getuid())"
+        let domain = "gui/\(serviceUID)"
         runLaunchctl(["bootstrap", domain, launchAgentURL.path])
         runLaunchctl(["kickstart", "-k", serviceTarget])
     }
@@ -121,6 +145,7 @@ struct CodexLifecycleInstaller {
 
     @discardableResult
     private func runLaunchctl(_ arguments: [String]) -> Int32? {
+        if let launchctlRunner { return launchctlRunner(arguments) }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = arguments

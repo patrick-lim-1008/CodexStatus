@@ -15,6 +15,22 @@ enum CompletionReadMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum AppTheme: String, CaseIterable, Identifiable, Sendable {
+    case system
+    case light
+    case dark
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+}
+
 enum NotificationSoundChoice: String, CaseIterable, Identifiable, Sendable {
     case none
     case systemDefault
@@ -47,12 +63,36 @@ enum NotificationSoundChoice: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum ProgressRefreshInterval: Int, CaseIterable, Identifiable, Sendable {
+    case manual = 0
+    case oneMinute = 60
+    case threeMinutes = 180
+    case fiveMinutes = 300
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .manual: "Manual only"
+        case .oneMinute: "Every minute"
+        case .threeMinutes: "Every 3 minutes"
+        case .fiveMinutes: "Every 5 minutes"
+        }
+    }
+
+    var seconds: TimeInterval? {
+        self == .manual ? nil : TimeInterval(rawValue)
+    }
+}
+
 /// The user-facing preferences shared by the menu bar UI and settings window.
 ///
 /// Each value is written as soon as it changes so an accessory app can quit at
 /// any time without needing a separate save step.
 @MainActor
 final class AppPreferences: ObservableObject {
+    static let defaultProgressSidecarPrompt = "Summarize the source task's current observable progress in the same language as the user. Use at most three short lines covering the current stage, what is complete or happening now, and the next step. Do not reveal chain-of-thought, invent a percentage or ETA, or modify anything."
+
     private enum Key {
         static let followCodexLifecycle = "preferences.followCodexLifecycle"
         static let completionReadMode = "preferences.completionReadMode"
@@ -60,9 +100,11 @@ final class AppPreferences: ObservableObject {
         static let showMenuBarCount = "preferences.showMenuBarCount"
         static let cycleStatusColors = "preferences.cycleStatusColors"
         static let foldIdleTasks = "preferences.foldIdleTasks"
+        static let appTheme = "preferences.appTheme"
         static let usageEnabled = "extensions.usageMeter.enabled"
         static let enhancedActivityEnabled = "extensions.enhancedActivity.enabled"
         static let notificationsEnabled = "extensions.notifications.enabled"
+        static let updateChecksEnabled = "extensions.updateChecks.enabled"
         // Kept only as migration inputs from v0.2's single global sound setting.
         static let notificationSoundEnabled = "extensions.notifications.soundEnabled"
         static let notificationSoundChoice = "extensions.notifications.soundChoice"
@@ -75,6 +117,11 @@ final class AppPreferences: ObservableObject {
         static let notificationQuietHoursEnabled = "extensions.notifications.quietHours.enabled"
         static let notificationQuietStartMinute = "extensions.notifications.quietHours.startMinute"
         static let notificationQuietEndMinute = "extensions.notifications.quietHours.endMinute"
+        static let progressSidecarEnabled = "extensions.progressSidecar.enabled"
+        static let progressSidecarPrompt = "extensions.progressSidecar.prompt"
+        static let progressSidecarWarningAcknowledged = "extensions.progressSidecar.warningAcknowledged"
+        static let progressRefreshInterval = "extensions.progressSidecar.refreshInterval"
+        static let legacyTaskCheckInsEnabled = "extensions.taskCheckIns.enabled"
     }
 
     private let defaults: UserDefaults
@@ -103,6 +150,10 @@ final class AppPreferences: ObservableObject {
         didSet { defaults.set(foldIdleTasks, forKey: Key.foldIdleTasks) }
     }
 
+    @Published var appTheme: AppTheme {
+        didSet { defaults.set(appTheme.rawValue, forKey: Key.appTheme) }
+    }
+
     @Published var usageEnabled: Bool {
         didSet { defaults.set(usageEnabled, forKey: Key.usageEnabled) }
     }
@@ -113,6 +164,10 @@ final class AppPreferences: ObservableObject {
 
     @Published var notificationsEnabled: Bool {
         didSet { defaults.set(notificationsEnabled, forKey: Key.notificationsEnabled) }
+    }
+
+    @Published var updateChecksEnabled: Bool {
+        didSet { defaults.set(updateChecksEnabled, forKey: Key.updateChecksEnabled) }
     }
 
     @Published var completionNotificationSound: NotificationSoundChoice {
@@ -149,6 +204,22 @@ final class AppPreferences: ObservableObject {
 
     @Published var notificationQuietEndMinute: Int {
         didSet { defaults.set(notificationQuietEndMinute, forKey: Key.notificationQuietEndMinute) }
+    }
+
+    @Published var progressSidecarEnabled: Bool {
+        didSet { defaults.set(progressSidecarEnabled, forKey: Key.progressSidecarEnabled) }
+    }
+
+    @Published var progressSidecarPrompt: String {
+        didSet { defaults.set(progressSidecarPrompt, forKey: Key.progressSidecarPrompt) }
+    }
+
+    @Published var progressSidecarWarningAcknowledged: Bool {
+        didSet { defaults.set(progressSidecarWarningAcknowledged, forKey: Key.progressSidecarWarningAcknowledged) }
+    }
+
+    @Published var progressRefreshInterval: ProgressRefreshInterval {
+        didSet { defaults.set(progressRefreshInterval.rawValue, forKey: Key.progressRefreshInterval) }
     }
 
     /// Creates preferences while safely migrating users of the original release.
@@ -192,6 +263,9 @@ final class AppPreferences: ObservableObject {
             forKey: Key.foldIdleTasks,
             fallback: true
         )
+        appTheme = defaults.string(forKey: Key.appTheme)
+            .flatMap(AppTheme.init(rawValue:))
+            ?? .system
         usageEnabled = Self.storedBool(
             in: defaults,
             forKey: Key.usageEnabled,
@@ -205,6 +279,11 @@ final class AppPreferences: ObservableObject {
         notificationsEnabled = Self.storedBool(
             in: defaults,
             forKey: Key.notificationsEnabled,
+            fallback: false
+        )
+        updateChecksEnabled = Self.storedBool(
+            in: defaults,
+            forKey: Key.updateChecksEnabled,
             fallback: false
         )
         let legacySoundEnabled = Self.storedBool(
@@ -259,6 +338,27 @@ final class AppPreferences: ObservableObject {
             forKey: Key.notificationQuietEndMinute,
             fallback: 8 * 60
         )
+        let legacySidecarEnabled = Self.storedBool(
+            in: defaults,
+            forKey: Key.legacyTaskCheckInsEnabled,
+            fallback: false
+        )
+        progressSidecarEnabled = Self.storedBool(
+            in: defaults,
+            forKey: Key.progressSidecarEnabled,
+            fallback: legacySidecarEnabled
+        )
+        progressSidecarPrompt = defaults.string(forKey: Key.progressSidecarPrompt)
+            ?? Self.defaultProgressSidecarPrompt
+        progressSidecarWarningAcknowledged = Self.storedBool(
+            in: defaults,
+            forKey: Key.progressSidecarWarningAcknowledged,
+            fallback: false
+        )
+        progressRefreshInterval = defaults.object(forKey: Key.progressRefreshInterval)
+            .flatMap { ($0 as? NSNumber)?.intValue }
+            .flatMap(ProgressRefreshInterval.init(rawValue:))
+            ?? .manual
 
         persistInitialValues()
     }
@@ -300,9 +400,11 @@ final class AppPreferences: ObservableObject {
         defaults.set(showMenuBarCount, forKey: Key.showMenuBarCount)
         defaults.set(cycleStatusColors, forKey: Key.cycleStatusColors)
         defaults.set(foldIdleTasks, forKey: Key.foldIdleTasks)
+        defaults.set(appTheme.rawValue, forKey: Key.appTheme)
         defaults.set(usageEnabled, forKey: Key.usageEnabled)
         defaults.set(enhancedActivityEnabled, forKey: Key.enhancedActivityEnabled)
         defaults.set(notificationsEnabled, forKey: Key.notificationsEnabled)
+        defaults.set(updateChecksEnabled, forKey: Key.updateChecksEnabled)
         defaults.set(completionNotificationSound.rawValue, forKey: Key.completionNotificationSound)
         defaults.set(attentionNotificationSound.rawValue, forKey: Key.attentionNotificationSound)
         defaults.set(errorNotificationSound.rawValue, forKey: Key.errorNotificationSound)
@@ -312,5 +414,9 @@ final class AppPreferences: ObservableObject {
         defaults.set(notificationQuietHoursEnabled, forKey: Key.notificationQuietHoursEnabled)
         defaults.set(notificationQuietStartMinute, forKey: Key.notificationQuietStartMinute)
         defaults.set(notificationQuietEndMinute, forKey: Key.notificationQuietEndMinute)
+        defaults.set(progressSidecarEnabled, forKey: Key.progressSidecarEnabled)
+        defaults.set(progressSidecarPrompt, forKey: Key.progressSidecarPrompt)
+        defaults.set(progressSidecarWarningAcknowledged, forKey: Key.progressSidecarWarningAcknowledged)
+        defaults.set(progressRefreshInterval.rawValue, forKey: Key.progressRefreshInterval)
     }
 }

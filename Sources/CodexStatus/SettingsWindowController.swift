@@ -5,17 +5,23 @@ import SwiftUI
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     init(
         preferences: AppPreferences,
+        pluginRegistry: PluginRegistry,
         model: StatusModel,
+        updateChecker: AppUpdateChecker,
+        notificationController: StatusNotificationController,
+        lifecycleController: LifecycleController,
         onOpenDataFolder: @escaping () -> Void,
-        onRemoveAllIntegrations: @escaping () -> Void,
-        onSendTestNotification: @escaping (AgentStatus) -> Void
+        onRemoveAllIntegrations: @escaping () -> Void
     ) {
         let settingsView = SettingsView(
             preferences: preferences,
+            pluginRegistry: pluginRegistry,
             model: model,
+            updateChecker: updateChecker,
+            notificationController: notificationController,
+            lifecycleController: lifecycleController,
             onOpenDataFolder: onOpenDataFolder,
-            onRemoveAllIntegrations: onRemoveAllIntegrations,
-            onSendTestNotification: onSendTestNotification
+            onRemoveAllIntegrations: onRemoveAllIntegrations
         )
         let hostingController = NSHostingController(rootView: settingsView)
         let window = NSWindow(

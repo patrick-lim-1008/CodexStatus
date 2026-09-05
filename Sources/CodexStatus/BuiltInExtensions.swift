@@ -1,93 +1,88 @@
 import Foundation
 
-enum BuiltInExtensionID: String, CaseIterable, Identifiable, Sendable {
-    case usageMeter
-    case enhancedActivity
-    case macOSNotifications
-
-    var id: Self { self }
+enum BuiltInPluginIdentifiers {
+    static let progressSidecar = "com.codexstatus.progress-sidecar"
 }
 
-enum BuiltInExtensionCapability: String, CaseIterable, Identifiable, Sendable {
-    case readLocalUsage
-    case readTaskActivity
-    case installCodexHooks
-    case postNotifications
-    case playSounds
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .readLocalUsage: "Reads local usage limits"
-        case .readTaskActivity: "Reads local task activity"
-        case .installCodexHooks: "Adds Codex lifecycle hooks"
-        case .postNotifications: "Posts macOS notifications"
-        case .playSounds: "Plays notification sounds"
-        }
-    }
-}
-
-struct BuiltInExtensionDescriptor: Identifiable, Sendable {
-    let id: BuiltInExtensionID
+struct BuiltInFeatureDescriptor {
     let name: String
     let summary: String
     let symbolName: String
-    let version: String
-    let author: String
-    let capabilities: [BuiltInExtensionCapability]
-    let privacySummary: String
-    let defaultEnabled: Bool
+    let capabilities: [String]
+    let privacyDescription: String
+    let availability: String
 }
 
-enum BuiltInExtensions {
-    static let usageMeter = BuiltInExtensionDescriptor(
-        id: .usageMeter,
+enum BuiltInFeatures {
+    static let coreStatus = BuiltInFeatureDescriptor(
+        name: "Core Status",
+        summary: "Detects task state and activity, keeps completion history, and opens the exact Codex task you select.",
+        symbolName: "dot.radiowaves.left.and.right",
+        capabilities: ["readTaskActivity", "openCodexTasks"],
+        privacyDescription: "Reads local Codex task metadata. Prompts, reasoning, commands, paths, and tool output are not displayed or uploaded.",
+        availability: "Built in · Always on"
+    )
+
+    static let usageMeter = BuiltInFeatureDescriptor(
         name: "Usage Meter",
         summary: "Shows the rate-limit windows available to your signed-in Codex account.",
         symbolName: "chart.donut",
-        version: "1.0",
-        author: "CodexStatus",
-        capabilities: [.readLocalUsage],
-        privacySummary: "Reads usage data from the local Codex App Server. Nothing is uploaded.",
-        defaultEnabled: true
+        capabilities: ["readLocalUsage"],
+        privacyDescription: "Reads usage data from the local Codex App Server. Nothing is uploaded.",
+        availability: "Built in · Default on"
     )
 
-    static let enhancedActivity = BuiltInExtensionDescriptor(
-        id: .enhancedActivity,
+    static let enhancedActivity = BuiltInFeatureDescriptor(
         name: "Enhanced Activity",
         summary: "Improves approval, failure, and live task-state detection with lifecycle hooks.",
         symbolName: "bolt.horizontal.circle",
-        version: "1.0",
-        author: "CodexStatus",
-        capabilities: [.readTaskActivity, .installCodexHooks],
-        privacySummary: "Adds local Codex hooks that write small status snapshots on this Mac.",
-        defaultEnabled: false
+        capabilities: ["readTaskActivity", "installCodexHooks"],
+        privacyDescription: "Adds local Codex hooks that write small status snapshots on this Mac.",
+        availability: "Built in · Optional"
     )
 
-    static let macOSNotifications = BuiltInExtensionDescriptor(
-        id: .macOSNotifications,
+    static let macOSNotifications = BuiltInFeatureDescriptor(
         name: "macOS Notifications",
         summary: "Alerts you when a task finishes, needs attention, or stops with an error.",
         symbolName: "bell.badge",
-        version: "1.0",
-        author: "CodexStatus",
-        capabilities: [.postNotifications, .playSounds],
-        privacySummary: "Uses the macOS notification service. Notification content stays on this Mac.",
-        defaultEnabled: false
+        capabilities: ["postNotifications", "playSounds"],
+        privacyDescription: "Uses the macOS notification service. Notification content stays on this Mac.",
+        availability: "Built in · Optional"
     )
 
-    static let all: [BuiltInExtensionDescriptor] = [
-        usageMeter,
-        enhancedActivity,
-        macOSNotifications
-    ]
+    static let codexLifecycle = BuiltInFeatureDescriptor(
+        name: "Follow Codex Lifecycle",
+        summary: "Starts CodexStatus with Codex and closes it after Codex quits.",
+        symbolName: "power",
+        capabilities: ["installLifecycleWatcher"],
+        privacyDescription: "Installs a local LaunchAgent that only checks whether the Codex app is running.",
+        availability: "Built in · Optional"
+    )
 
-    static func descriptor(for id: BuiltInExtensionID) -> BuiltInExtensionDescriptor {
-        switch id {
-        case .usageMeter: usageMeter
-        case .enhancedActivity: enhancedActivity
-        case .macOSNotifications: macOSNotifications
-        }
-    }
+    static let updateChecks = BuiltInFeatureDescriptor(
+        name: "CodexStatus Update Checks",
+        summary: "Checks GitHub periodically for a newer stable CodexStatus release.",
+        symbolName: "arrow.triangle.2.circlepath.circle",
+        capabilities: ["accessGitHubReleases"],
+        privacyDescription: "Connects only to the public CodexStatus releases endpoint on GitHub. It does not upload task data.",
+        availability: "Built in · Optional"
+    )
+}
+
+/// Keeps Settings usable if the signed plugin package is copied incompletely.
+enum BuiltInPluginFallbacks {
+    static let progressSidecar = PluginManifest(
+        schemaVersion: 1,
+        identifier: BuiltInPluginIdentifiers.progressSidecar,
+        name: "Progress Sidecar",
+        version: "1.0.0",
+        minimumHostVersion: "0.2.2",
+        author: "CodexStatus",
+        summary: "Shows concise progress through a temporary /side-style conversation.",
+        symbolName: "sidebar.right",
+        kind: .native,
+        entryPoint: "progress-sidecar",
+        capabilities: ["readTaskActivity", "createEphemeralSideConversation", "useModelQuota"],
+        privacyDescription: "Creates an ephemeral, read-only fork of the selected task. The summary stays in CodexStatus and does not enter the source conversation. Each refresh uses account quota."
+    )
 }

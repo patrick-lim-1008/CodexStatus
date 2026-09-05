@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 @preconcurrency import UserNotifications
 
@@ -38,18 +39,17 @@ struct NotificationConfiguration: Equatable {
 
     func isQuiet(at date: Date, calendar: Calendar = .current) -> Bool {
         guard quietHoursEnabled else { return false }
-        let components = calendar.dateComponents([.hour, .minute], from: date)
-        let minute = (components.hour ?? 0) * 60 + (components.minute ?? 0)
-        let start = max(0, min(1_439, quietStartMinute))
-        let end = max(0, min(1_439, quietEndMinute))
-        if start == end { return true }
-        if start < end { return minute >= start && minute < end }
-        return minute >= start || minute < end
+        return QuietHoursPolicy.isQuiet(
+            at: date,
+            startMinute: quietStartMinute,
+            endMinute: quietEndMinute,
+            calendar: calendar
+        )
     }
 }
 
 @MainActor
-final class StatusNotificationController: NSObject {
+final class StatusNotificationController: NSObject, ObservableObject {
     typealias OpenThreadAction = @MainActor (String) -> Void
 
     private enum AuthorizationState {
@@ -87,6 +87,8 @@ final class StatusNotificationController: NSObject {
     private nonisolated static let soundEnabledUserInfoKey = "CodexStatus.soundEnabled"
     private static let requestIdentifierPrefix = "CodexStatus.task."
     private static let retainedEventLimit = 256
+
+    @Published private(set) var statusText = "Off"
 
     private let center: UNUserNotificationCenter
     private let openThread: OpenThreadAction
@@ -130,6 +132,7 @@ final class StatusNotificationController: NSObject {
         configuration = newConfiguration
 
         guard newConfiguration.enabled else {
+            statusText = "Off"
             guard wasEnabled else { return }
             authorizationGeneration &+= 1
             authorizationState = .unknown
@@ -220,6 +223,7 @@ final class StatusNotificationController: NSObject {
         authorizationGeneration &+= 1
         let generation = authorizationGeneration
         authorizationState = .requesting
+        statusText = "Requesting permission…"
 
         var options: UNAuthorizationOptions = [.alert]
         if configuration.hasAnySound {
@@ -233,6 +237,7 @@ final class StatusNotificationController: NSObject {
                 else { return }
 
                 self.authorizationState = granted ? .allowed : .denied
+                self.statusText = granted ? "Ready" : "Permission denied"
                 if granted {
                     let events = self.pendingEvents
                     self.pendingEvents.removeAll(keepingCapacity: false)

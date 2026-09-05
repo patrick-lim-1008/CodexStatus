@@ -48,23 +48,38 @@ swiftc \
     -target arm64-apple-macosx13.0 \
     -module-cache-path "$build_dir/module-cache" \
     -interface-compiler-version "$sdk_compiler_version" \
+    Sources/CodexStatusProgress/*.swift \
+    -o "$build_dir/CodexStatusProgress"
+
+swiftc \
+    -O \
+    -sdk "$sdk_path" \
+    -target arm64-apple-macosx13.0 \
+    -module-cache-path "$build_dir/module-cache" \
+    -interface-compiler-version "$sdk_compiler_version" \
     Sources/CodexStatusWatcher/*.swift \
     -o "$build_dir/CodexStatusWatcher"
 
 rm -rf "$app_dir"
 mkdir -p "$app_dir/Contents/MacOS"
 mkdir -p "$app_dir/Contents/Helpers"
+mkdir -p "$app_dir/Contents/Resources"
 cp "$build_dir/CodexStatus" "$app_dir/Contents/MacOS/CodexStatus"
 cp "$build_dir/CodexStatusHook" "$app_dir/Contents/Helpers/CodexStatusHook"
 cp "$build_dir/CodexStatusThreadScanner" "$app_dir/Contents/Helpers/CodexStatusThreadScanner"
 cp "$build_dir/CodexStatusWatcher" "$app_dir/Contents/Helpers/CodexStatusWatcher"
 cp "Resources/Info.plist" "$app_dir/Contents/Info.plist"
+cp -R "Resources/Plugins" "$app_dir/Contents/Resources/Plugins"
+sidecar_helper_dir="$app_dir/Contents/Resources/Plugins/com.codexstatus.progress-sidecar.codexstatusplugin/Helpers"
+mkdir -p "$sidecar_helper_dir"
+cp "$build_dir/CodexStatusProgress" "$sidecar_helper_dir/CodexStatusProgress"
 
 # The watcher is copied out of the app bundle by the launch agent. Explicitly
 # signing each helper keeps macOS from rejecting that copied executable.
 for helper in "$app_dir"/Contents/Helpers/*; do
     codesign --force --sign - "$helper"
 done
+codesign --force --sign - "$sidecar_helper_dir/CodexStatusProgress"
 codesign --force --sign - "$app_dir"
 
 echo "$app_dir"

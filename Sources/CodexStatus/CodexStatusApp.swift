@@ -16,8 +16,10 @@ struct CodexStatusApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let preferences: AppPreferences
+    private let pluginRegistry: PluginRegistry
     private let model: StatusModel
-    private let lifecycleInstaller = CodexLifecycleInstaller()
+    private let updateChecker: AppUpdateChecker
+    private let lifecycleController: LifecycleController
     private let statusItem = NSStatusBar.system.statusItem(withLength: 34)
     private let popover = NSPopover()
     private var modelObserver: AnyCancellable?
@@ -32,12 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private lazy var settingsWindowController = SettingsWindowController(
         preferences: preferences,
+        pluginRegistry: pluginRegistry,
         model: model,
+        updateChecker: updateChecker,
+        notificationController: notificationController,
+        lifecycleController: lifecycleController,
         onOpenDataFolder: { [weak self] in self?.openDataFolder() },
-        onRemoveAllIntegrations: { [weak self] in self?.removeAllIntegrations() },
-        onSendTestNotification: { [weak self] status in
-            self?.notificationController.sendTestNotification(for: status)
-        }
+        onRemoveAllIntegrations: { [weak self] in self?.removeAllIntegrations() }
     )
 
     override init() {
@@ -48,7 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             existingLifecycleInstalled: existingLifecycleInstalled
         )
         self.preferences = preferences
-        model = StatusModel(preferences: preferences)
+        pluginRegistry = PluginRegistry()
+        updateChecker = AppUpdateChecker()
+        lifecycleController = LifecycleController()
+        model = StatusModel(preferences: preferences, pluginRegistry: pluginRegistry)
         super.init()
     }
 
@@ -62,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.contentViewController = NSHostingController(rootView: StatusPopover(
             model: model,
             preferences: preferences,
+            updateChecker: updateChecker,
             onOpenSettings: { [weak self] in self?.openSettings() }
         ))
 
@@ -86,10 +93,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 self?.advanceStatusCycle()
             }
         }
+
+        if CommandLine.arguments.contains("--settings") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.openSettings()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         statusCycleTimer?.invalidate()
+        updateChecker.setEnabled(false)
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        if urls.contains(where: { $0.scheme == "codexstatus" && $0.host == "settings" }) {
+            openSettings()
+        }
     }
 
     @objc private func togglePopover() {
@@ -159,11 +179,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             let visibleItemCount = taskRowCount + disclosureCount
             let interRowSpacing = max(0, visibleItemCount - 1) * 2
             height = min(
-                380,
+                520,
                 64
                     + CGFloat(taskRowCount * 44)
                     + CGFloat(disclosureCount * 30)
                     + CGFloat(interRowSpacing)
+                    + CGFloat(model.visibleProgressSummaryCount * 72)
+                    + CGFloat(model.visibleProgressLoadingCount * 24)
             )
         }
         popover.contentSize = NSSize(width: 224, height: height)
@@ -182,7 +204,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         preferences.$followCodexLifecycle
             .removeDuplicates()
             .sink { [weak self] enabled in
-                self?.applyLifecyclePreference(enabled)
+                self?.lifecycleController.apply(enabled: enabled)
+            }
+            .store(in: &preferenceObservers)
+
+        preferences.$updateChecksEnabled
+            .removeDuplicates()
+            .sink { [weak self] enabled in
+                self?.updateChecker.setEnabled(enabled)
             }
             .store(in: &preferenceObservers)
 
@@ -202,18 +231,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             quietStartMinute: preferences.notificationQuietStartMinute,
             quietEndMinute: preferences.notificationQuietEndMinute
         ))
-    }
-
-    private func applyLifecyclePreference(_ enabled: Bool) {
-        do {
-            if enabled {
-                try lifecycleInstaller.install()
-            } else {
-                try lifecycleInstaller.uninstall()
-            }
-        } catch {
-            NSLog("CodexStatus lifecycle update failed: \(error.localizedDescription)")
-        }
     }
 
     private func showContextMenu(relativeTo button: NSStatusBarButton) {
@@ -263,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         preferences.enhancedActivityEnabled = false
         preferences.followCodexLifecycle = false
         model.removeIntegration()
-        try? lifecycleInstaller.uninstall()
+        lifecycleController.apply(enabled: false)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

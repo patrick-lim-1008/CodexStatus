@@ -9,6 +9,7 @@ let package = Package(
         .executable(name: "CodexStatus", targets: ["CodexStatus"]),
         .executable(name: "CodexStatusHook", targets: ["CodexStatusHook"]),
         .executable(name: "CodexStatusThreadScanner", targets: ["CodexStatusThreadScanner"]),
+        .executable(name: "CodexStatusProgress", targets: ["CodexStatusProgress"]),
         .executable(name: "CodexStatusWatcher", targets: ["CodexStatusWatcher"])
     ],
     targets: [
@@ -23,6 +24,10 @@ let package = Package(
         .executableTarget(
             name: "CodexStatusThreadScanner",
             path: "Sources/CodexStatusThreadScanner"
+        ),
+        .executableTarget(
+            name: "CodexStatusProgress",
+            path: "Sources/CodexStatusProgress"
         ),
         .executableTarget(
             name: "CodexStatusWatcher",

@@ -21,6 +21,7 @@ struct UsageWindow: Codable {
 }
 
 struct ScanResult: Codable {
+    let connected: Bool
     let threads: [ThreadSummary]
     let usageWindows: [UsageWindow]?
 }
@@ -216,11 +217,23 @@ if CommandLine.arguments.contains("--parse-rollout") {
 }
 
 let environment = ProcessInfo.processInfo.environment
-let codexPath = environment["CODEX_CLI_PATH"]
-    ?? "/Applications/ChatGPT.app/Contents/Resources/codex"
-
-guard FileManager.default.isExecutableFile(atPath: codexPath) else {
-    FileHandle.standardOutput.write(Data("[]\n".utf8))
+let codexCandidates: [String]
+if let override = environment["CODEX_CLI_PATH"] {
+    codexCandidates = [override]
+} else {
+    codexCandidates = [
+        "/Applications/Codex.app/Contents/Resources/codex",
+        "/Applications/ChatGPT.app/Contents/Resources/codex"
+    ]
+}
+guard let codexPath = codexCandidates.first(where: {
+    FileManager.default.isExecutableFile(atPath: $0)
+}) else {
+    let result = ScanResult(connected: false, threads: [], usageWindows: nil)
+    if let data = try? JSONEncoder().encode(result) {
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+    }
     exit(0)
 }
 
@@ -262,6 +275,23 @@ func parseUsageWindow(_ value: Any?, fallback: String) -> UsageWindow? {
         remainingPercent: max(0, min(100, 100 - used)),
         resetsAt: (object["resetsAt"] as? NSNumber)?.doubleValue ?? 0
     )
+}
+
+func parseUsageWindows(_ result: [String: Any]) -> [UsageWindow] {
+    let legacyLimit = result["rateLimits"] as? [String: Any]
+    let canonicalLimitID = legacyLimit?["limitId"] as? String ?? "codex"
+    let limitsByID = result["rateLimitsByLimitId"] as? [String: Any]
+    let canonicalLimit = limitsByID?[canonicalLimitID] as? [String: Any]
+        ?? legacyLimit
+    guard let canonicalLimit else { return [] }
+
+    // The map can also contain model-specific buckets such as a 5-hour window
+    // for one Codex model. Those are not the account's general 5-hour limit and
+    // must not switch the compact meter into dual-window mode.
+    return [
+        parseUsageWindow(canonicalLimit["primary"], fallback: "Primary limit"),
+        parseUsageWindow(canonicalLimit["secondary"], fallback: "Secondary limit")
+    ].compactMap { $0 }
 }
 
 func signalIfFinished() {
@@ -309,12 +339,8 @@ output.fileHandleForReading.readabilityHandler = { handle in
             }
             receivedThreads = true
         } else if messageID == 2 {
-            if let result = message["result"] as? [String: Any],
-               let limits = result["rateLimits"] as? [String: Any] {
-                usageWindows = [
-                    parseUsageWindow(limits["primary"], fallback: "Primary limit"),
-                    parseUsageWindow(limits["secondary"], fallback: "Secondary limit")
-                ].compactMap { $0 }
+            if let result = message["result"] as? [String: Any] {
+                usageWindows = parseUsageWindows(result)
             } else {
                 usageWindows = []
             }
@@ -329,7 +355,7 @@ do {
     try server.run()
     var messages = [
         ["method": "initialize", "id": 0, "params": [
-            "clientInfo": ["name": "codex_status", "title": "CodexStatus", "version": "0.2.2"]
+            "clientInfo": ["name": "codex_status", "title": "CodexStatus", "version": "0.3.0"]
         ]],
         ["method": "initialized", "params": [:]],
         ["method": "thread/list", "id": 1, "params": ["limit": 20, "sortKey": "updated_at"]]
@@ -353,7 +379,11 @@ output.fileHandleForReading.readabilityHandler = nil
 if server.isRunning { server.terminate() }
 
 let encoder = JSONEncoder()
-let result = ScanResult(threads: receivedThreads ? summaries : [], usageWindows: usageWindows)
+let result = ScanResult(
+    connected: receivedThreads,
+    threads: receivedThreads ? summaries : [],
+    usageWindows: usageWindows
+)
 if let data = try? encoder.encode(result) {
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data("\n".utf8))

@@ -4,7 +4,22 @@ import SwiftUI
 struct StatusPopover: View {
     @ObservedObject var model: StatusModel
     @ObservedObject var preferences: AppPreferences
+    @ObservedObject var updateChecker: AppUpdateChecker
+    @ObservedObject private var viewState: StatusPopoverViewState
     let onOpenSettings: () -> Void
+
+    init(
+        model: StatusModel,
+        preferences: AppPreferences,
+        updateChecker: AppUpdateChecker,
+        onOpenSettings: @escaping () -> Void
+    ) {
+        self.model = model
+        self.preferences = preferences
+        self.updateChecker = updateChecker
+        viewState = StatusPopoverViewState()
+        self.onOpenSettings = onOpenSettings
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,14 +31,14 @@ struct StatusPopover: View {
             } else {
                 VStack(spacing: 2) {
                     ForEach(model.prominentTasks) { task in
-                        taskButton(task)
+                        taskEntry(task)
                     }
 
                     if !model.foldedIdleTasks.isEmpty {
                         idleDisclosure
                         if model.showsIdleTasks {
                             ForEach(model.foldedIdleTasks) { task in
-                                taskButton(task)
+                                taskEntry(task)
                             }
                         }
                     }
@@ -34,30 +49,131 @@ struct StatusPopover: View {
         }
         .frame(width: 224)
         .background(.regularMaterial)
+        .preferredColorScheme(preferences.appTheme.colorScheme)
+        .alert(item: $viewState.progressAlert) { alert in
+            switch alert {
+            case .confirmation(let task):
+                Alert(
+                    title: Text("Ask the Progress Sidecar?"),
+                    message: Text("This creates a temporary side conversation for “\(task.name)”. It will not change the source task, but it uses account quota."),
+                    primaryButton: .default(Text("Ask Sidecar")) {
+                        preferences.progressSidecarWarningAcknowledged = true
+                        sendProgressRequest(for: task)
+                    },
+                    secondaryButton: .cancel()
+                )
+            case .failure(let message):
+                Alert(
+                    title: Text("Progress is unavailable"),
+                    message: Text(message),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
+        }
     }
 
-    private func taskButton(_ task: AgentTask) -> some View {
-        Button { model.openThread(task.id) } label: {
-            TaskRow(
-                task: task,
-                showsProjectName: preferences.showProjectNames,
-                isProjectHovering: model.hoveredProjectTaskID == task.id,
-                onProjectHoverChanged: { hovering in
-                    if hovering {
-                        model.hoveredProjectTaskID = task.id
-                    } else if model.hoveredProjectTaskID == task.id {
-                        model.hoveredProjectTaskID = nil
-                    }
+    private func taskEntry(_ task: AgentTask) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Button { model.openThread(task.id) } label: {
+                    TaskRow(
+                        task: task,
+                        showsProjectName: preferences.showProjectNames,
+                        isProjectHovering: model.hoveredProjectTaskID == task.id,
+                        onProjectHoverChanged: { hovering in
+                            if hovering {
+                                model.hoveredProjectTaskID = task.id
+                            } else if model.hoveredProjectTaskID == task.id {
+                                model.hoveredProjectTaskID = nil
+                            }
+                        }
+                    )
                 }
-            )
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if preferences.progressSidecarEnabled {
+                    Button {
+                        beginProgressRequest(for: task)
+                    } label: {
+                        Group {
+                            if model.progressSidecar.requestingTaskIDs.contains(task.id) {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: "sidebar.right")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.progressSidecar.requestingTaskIDs.contains(task.id))
+                    .help("Ask for progress without interrupting this task")
+                }
+            }
+            .contextMenu {
+                if preferences.progressSidecarEnabled {
+                    if model.progressSidecar.requestingTaskIDs.contains(task.id) {
+                        Button("Getting progress…") {}
+                            .disabled(true)
+                    } else {
+                        Button("Ask Progress Sidecar") {
+                            beginProgressRequest(for: task)
+                        }
+                    }
+                    if model.progressSidecar.snapshots[task.id] != nil {
+                        Button("Hide Progress") {
+                            model.progressSidecar.dismissProgress(for: task.id)
+                        }
+                    }
+                } else {
+                    Button("Enable Progress Sidecar…", action: onOpenSettings)
+                }
+            }
+
+            if let snapshot = model.progressSidecar.snapshots[task.id] {
+                ProgressSnapshotView(snapshot: snapshot) {
+                    model.progressSidecar.dismissProgress(for: task.id)
+                }
+                .padding(.leading, 25)
+                .padding(.trailing, 4)
+                .padding(.bottom, 6)
+            } else if model.progressSidecar.requestingTaskIDs.contains(task.id) {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.mini)
+                    Text("Asking in a temporary side conversation…")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.leading, 25)
+                .padding(.trailing, 4)
+                .padding(.bottom, 7)
+            }
         }
-        .buttonStyle(.plain)
         .onHover { hovering in
             if hovering && task.status == .done && preferences.completionReadMode == .hover {
                 model.acknowledgeCompletion(for: task.id)
             }
         }
         .zIndex(model.hoveredProjectTaskID == task.id ? 20 : 0)
+    }
+
+    private func beginProgressRequest(for task: AgentTask) {
+        if preferences.progressSidecarWarningAcknowledged {
+            sendProgressRequest(for: task)
+        } else {
+            viewState.progressAlert = .confirmation(task)
+        }
+    }
+
+    private func sendProgressRequest(for task: AgentTask) {
+        model.progressSidecar.requestProgress(for: task) { result in
+            if case .failure(let error) = result {
+                viewState.progressAlert = .failure(error.localizedDescription)
+            }
+        }
     }
 
     private var idleDisclosure: some View {
@@ -122,6 +238,17 @@ struct StatusPopover: View {
             .buttonStyle(.plain)
             .help("Open CodexStatus Settings")
 
+            if let update = updateChecker.state.availableUpdate {
+                Link(destination: update.releaseURL) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.orange)
+                        .frame(width: 13, height: 16)
+                }
+                .buttonStyle(.plain)
+                .help("CodexStatus \(update.version) is available")
+            }
+
             Spacer(minLength: 3)
             if preferences.usageEnabled {
                 UsageSummaryView(
@@ -153,9 +280,60 @@ struct StatusPopover: View {
     }
 
     private var summaryText: String {
-        guard !model.tasks.isEmpty else { return "Idle" }
+        guard !model.tasks.isEmpty else {
+            return model.isConnected ? "Idle" : "Waiting for Codex"
+        }
         let noun = model.summaryCount == 1 ? "task" : "tasks"
         return "\(model.summaryCount) \(noun) · \(model.summaryStatus.title)"
+    }
+}
+
+private enum ProgressAlert: Identifiable {
+    case confirmation(AgentTask)
+    case failure(String)
+
+    var id: String {
+        switch self {
+        case .confirmation(let task): "confirmation-\(task.id)"
+        case .failure(let message): "failure-\(message)"
+        }
+    }
+}
+
+@MainActor
+private final class StatusPopoverViewState: ObservableObject {
+    @Published var progressAlert: ProgressAlert?
+}
+
+private struct ProgressSnapshotView: View {
+    let snapshot: ProgressSnapshot
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(snapshot.summary)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.primary)
+                    .lineLimit(4)
+                    .multilineTextAlignment(.leading)
+                Text(snapshot.updatedAt, style: .relative)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 14, height: 14)
+            }
+            .buttonStyle(.plain)
+            .help("Hide progress")
+        }
+        .padding(7)
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
 

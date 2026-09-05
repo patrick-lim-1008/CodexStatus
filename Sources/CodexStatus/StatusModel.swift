@@ -92,6 +92,7 @@ struct UsageWindow: Decodable, Identifiable {
 }
 
 private struct ScanResult: Decodable {
+    let connected: Bool
     let threads: [DiscoveredThread]
     let usageWindows: [UsageWindow]?
 }
@@ -100,6 +101,9 @@ private struct ScanResult: Decodable {
 final class StatusModel: ObservableObject {
     /// Keep a stopped task noticeable, without leaving it as a permanent error.
     private static let stoppedStatusLifetime: TimeInterval = 5 * 60
+    /// Avoid flickering on one failed poll, but never leave a stale active task
+    /// blue indefinitely after Codex closes or its App Server becomes unavailable.
+    private static let discoveryFreshnessLifetime: TimeInterval = 30
 
     @Published private(set) var tasks: [AgentTask] = []
     @Published private(set) var hooksInstalled = false
@@ -110,6 +114,7 @@ final class StatusModel: ObservableObject {
     @Published var hoveredProjectTaskID: String?
     @Published private(set) var usageWindows: [UsageWindow] = []
     @Published private(set) var usageUpdatedAt: Date?
+    let progressSidecar: ProgressSidecarPlugin
 
     private let installer = CodexIntegrationInstaller()
     private let preferences: AppPreferences
@@ -117,25 +122,27 @@ final class StatusModel: ObservableObject {
     private var scanTimer: Timer?
     private var scannerProcess: Process?
     private var discoveredTasks: [AgentTask] = []
+    private var lastSuccessfulThreadScanAt: Date?
     private var lastUsageScan: Date?
-    private let doneTrackingStartedAt: TimeInterval
-    private var acknowledgedCompletions: [String: Double]
+    private var completionLedger: CompletionLedger
     private var preferenceObservers = Set<AnyCancellable>()
 
-    private static let doneTrackingStartedAtKey = "doneTrackingStartedAt.v1"
-    private static let acknowledgedCompletionsKey = "acknowledgedCompletions.v1"
-
-    init(preferences: AppPreferences) {
+    init(preferences: AppPreferences, pluginRegistry: PluginRegistry) {
         self.preferences = preferences
-        let defaults = UserDefaults.standard
-        if let storedStart = defaults.object(forKey: Self.doneTrackingStartedAtKey) as? NSNumber {
-            doneTrackingStartedAt = storedStart.doubleValue
-        } else {
-            doneTrackingStartedAt = Date().timeIntervalSince1970
-            defaults.set(doneTrackingStartedAt, forKey: Self.doneTrackingStartedAtKey)
-        }
-        acknowledgedCompletions = defaults.dictionary(forKey: Self.acknowledgedCompletionsKey)?
-            .compactMapValues { ($0 as? NSNumber)?.doubleValue } ?? [:]
+        let sidecarPackageURL = pluginRegistry.plugin(
+            identifier: BuiltInPluginIdentifiers.progressSidecar
+        )?.packageURL ?? Bundle.main.resourceURL?
+            .appendingPathComponent("Plugins/com.codexstatus.progress-sidecar.codexstatusplugin", isDirectory: true)
+            ?? Bundle.main.bundleURL
+        progressSidecar = ProgressSidecarPlugin(
+            preferences: preferences,
+            packageURL: sidecarPackageURL
+        )
+        completionLedger = CompletionLedger()
+
+        progressSidecar.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &preferenceObservers)
 
         applyEnhancedActivityPreference(preferences.enhancedActivityEnabled)
         hooksInstalled = installer.isInstalled
@@ -188,6 +195,21 @@ final class StatusModel: ObservableObject {
 
     var visibleTaskRowCount: Int {
         prominentTasks.count + (foldedIdleTasks.isEmpty ? 0 : (showsIdleTasks ? foldedIdleTasks.count : 1))
+    }
+
+    var visibleProgressSummaryCount: Int {
+        visibleTasks.filter { progressSidecar.snapshots[$0.id] != nil }.count
+    }
+
+    var visibleProgressLoadingCount: Int {
+        visibleTasks.filter {
+            progressSidecar.requestingTaskIDs.contains($0.id)
+                && progressSidecar.snapshots[$0.id] == nil
+        }.count
+    }
+
+    private var visibleTasks: [AgentTask] {
+        showsIdleTasks ? prominentTasks + foldedIdleTasks : prominentTasks
     }
 
     var weeklyUsageWindow: UsageWindow? {
@@ -270,7 +292,18 @@ final class StatusModel: ObservableObject {
         // is updating. Keep the newest row instead of using the trapping
         // Dictionary initializer, which would crash the menu-bar process.
         var merged: [String: AgentTask] = [:]
-        for task in discoveredTasks {
+        let discoveryIsFresh = appServerConnected
+            || lastSuccessfulThreadScanAt.map {
+                now.timeIntervalSince($0) < Self.discoveryFreshnessLifetime
+            } == true
+        for originalTask in discoveredTasks {
+            var task = originalTask
+            if !discoveryIsFresh,
+               task.status == .working || task.status == .needsAttention {
+                task.status = .idle
+                task.detail = "Status unavailable"
+                task.isRecentlyCompleted = false
+            }
             guard let existing = merged[task.id], existing.updatedAt >= task.updatedAt else {
                 merged[task.id] = task
                 continue
@@ -282,8 +315,15 @@ final class StatusModel: ObservableObject {
                 continue
             }
             // The rollout lifecycle is authoritative for Working/Done/Idle. Hooks
-            // still provide the richer approval and failure signals.
-            if task.status == .needsAttention || task.status == .error || task.status == discovered.status {
+            // provide richer approval and failure signals only when that signal is
+            // at least as new as the App Server row. This prevents an old Stopped
+            // hook from replacing a later successful or running turn.
+            let isFreshHookSignal = CoreTaskStatePolicy.shouldUseHookSignal(
+                isAttentionOrError: task.status == .needsAttention || task.status == .error,
+                hookUpdatedAt: task.updatedAt,
+                discoveredUpdatedAt: discovered.updatedAt
+            )
+            if isFreshHookSignal {
                 var enrichedTask = task
                 enrichedTask.projectName = discovered.projectName
                 enrichedTask.turnStartedAt = discovered.turnStartedAt
@@ -294,6 +334,7 @@ final class StatusModel: ObservableObject {
             .sorted { $0.updatedAt > $1.updatedAt }
             .prefix(6)
             .map { $0 }
+        progressSidecar.update(tasks: tasks)
 
         if appServerConnected, hooksInstalled {
             connectionMessage = tasks.isEmpty ? "Connected · waiting for a task" : "Live Codex activity"
@@ -301,6 +342,8 @@ final class StatusModel: ObservableObject {
             connectionMessage = tasks.isEmpty ? "Connected · waiting for a task" : "Codex activity"
         } else if hooksInstalled {
             connectionMessage = "Enhanced Activity ready"
+        } else if lastSuccessfulThreadScanAt != nil {
+            connectionMessage = "Codex unavailable · showing last known tasks"
         } else {
             connectionMessage = "Waiting for Codex"
         }
@@ -393,9 +436,14 @@ final class StatusModel: ObservableObject {
                     self.refresh()
                     return
                 }
-                self.appServerConnected = true
-                self.discoveredTasks = self.mapDiscoveredThreads(result.threads)
-                if self.preferences.usageEnabled, let windows = result.usageWindows {
+                self.appServerConnected = result.connected
+                if result.connected {
+                    self.lastSuccessfulThreadScanAt = Date()
+                    self.discoveredTasks = self.mapDiscoveredThreads(result.threads)
+                }
+                if result.connected,
+                   self.preferences.usageEnabled,
+                   let windows = result.usageWindows {
                     self.usageWindows = windows
                     self.usageUpdatedAt = Date()
                 }
@@ -462,20 +510,16 @@ final class StatusModel: ObservableObject {
             let detail: String
             let isRecentlyCompleted: Bool
             let completionAt: Date?
+            let resolvedState = CoreTaskStatePolicy.resolve(
+                statusType: row.statusType,
+                activeFlags: row.activeFlags,
+                rolloutLifecycle: row.lifecycle
+            )
 
-            if row.statusType == "active" && row.activeFlags.contains("waitingOnApproval") {
-                status = .needsAttention
-                detail = "Waiting for approval"
-                isRecentlyCompleted = false
-                completionAt = nil
-            } else if row.statusType == "active" || row.lifecycle == "running" {
-                status = .working
-                detail = row.activity == "Activity unavailable"
-                    ? "Thinking or working"
-                    : row.activity
-                isRecentlyCompleted = false
-                completionAt = nil
-            } else if row.lifecycle == "completed" {
+            // Terminal rollout events win over a briefly stale App Server active
+            // flag. Without this ordering, a completed or aborted turn can appear
+            // blue until the next server refresh.
+            if resolvedState == .completed {
                 let completedAt = Date(timeIntervalSince1970: row.lifecycleUpdatedAt)
                 completionAt = completedAt
                 if isUnacknowledgedCompletion(taskID: row.id, completedAt: completedAt) {
@@ -489,7 +533,7 @@ final class StatusModel: ObservableObject {
                     detail = "Completed · viewed"
                     isRecentlyCompleted = true
                 }
-            } else if row.lifecycle == "aborted" {
+            } else if resolvedState == .aborted {
                 let stoppedAt = Date(timeIntervalSince1970: row.lifecycleUpdatedAt)
                 let stoppedAge = row.lifecycleUpdatedAt > 0
                     ? max(0, now.timeIntervalSince(stoppedAt))
@@ -503,6 +547,18 @@ final class StatusModel: ObservableObject {
                 }
                 isRecentlyCompleted = false
                 completionAt = nil
+            } else if resolvedState == .needsAttention {
+                status = .needsAttention
+                detail = "Waiting for approval"
+                isRecentlyCompleted = false
+                completionAt = nil
+            } else if resolvedState == .working {
+                status = .working
+                detail = row.activity == "Activity unavailable"
+                    ? "Thinking or working"
+                    : row.activity
+                isRecentlyCompleted = false
+                completionAt = nil
             } else {
                 status = .idle
                 detail = relativeUpdateText(age)
@@ -511,7 +567,7 @@ final class StatusModel: ObservableObject {
             }
 
             let folderName = URL(fileURLWithPath: row.cwd).lastPathComponent
-            let projectName = projectDisplayName(for: row.cwd)
+            let projectName = ProjectIdentity.displayName(forWorkingDirectory: row.cwd)
             let displayName = row.name.isEmpty
                 ? (folderName.isEmpty ? "Codex Task" : folderName)
                 : row.name
@@ -535,9 +591,7 @@ final class StatusModel: ObservableObject {
     }
 
     private func isUnacknowledgedCompletion(taskID: String, completedAt: Date) -> Bool {
-        let timestamp = completedAt.timeIntervalSince1970
-        guard timestamp > doneTrackingStartedAt else { return false }
-        return timestamp > (acknowledgedCompletions[taskID] ?? 0)
+        completionLedger.isUnacknowledged(taskID: taskID, completedAt: completedAt)
     }
 
     func acknowledgeCompletion(for threadID: String) {
@@ -546,11 +600,7 @@ final class StatusModel: ObservableObject {
               let completedAt = task.completionAt
         else { return }
 
-        acknowledgedCompletions[threadID] = completedAt.timeIntervalSince1970
-        UserDefaults.standard.set(
-            acknowledgedCompletions,
-            forKey: Self.acknowledgedCompletionsKey
-        )
+        completionLedger.acknowledge(taskID: threadID, completedAt: completedAt)
 
         if let index = discoveredTasks.firstIndex(where: { $0.id == threadID }) {
             discoveredTasks[index].status = .idle
@@ -558,37 +608,6 @@ final class StatusModel: ObservableObject {
             discoveredTasks[index].isRecentlyCompleted = true
         }
         refresh()
-    }
-
-    private func projectDisplayName(for cwd: String) -> String? {
-        guard !cwd.isEmpty else { return nil }
-        let components = URL(fileURLWithPath: cwd).standardizedFileURL.pathComponents
-
-        // Projectless desktop tasks receive a generated Documents/Codex/YYYY-MM-DD/slug
-        // directory. It is workspace plumbing, not a user-facing project.
-        if let codexIndex = components.lastIndex(of: "Codex"),
-           components.count > codexIndex + 2,
-           isDateDirectory(components[codexIndex + 1]) {
-            return nil
-        }
-
-        // ChatGPT Projects currently expose an internal g-p-* working directory but
-        // not their display name through thread/list. Never leak that internal id.
-        if cwd.contains("/.codex/.chatgpt-projects/") {
-            return "ChatGPT Project"
-        }
-
-        let name = URL(fileURLWithPath: cwd).lastPathComponent
-        return name.isEmpty ? nil : name
-    }
-
-    private func isDateDirectory(_ value: String) -> Bool {
-        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
-        return parts.count == 3
-            && parts[0].count == 4
-            && parts[1].count == 2
-            && parts[2].count == 2
-            && parts.allSatisfy { $0.allSatisfy(\.isNumber) }
     }
 
     private func relativeUpdateText(_ age: TimeInterval) -> String {

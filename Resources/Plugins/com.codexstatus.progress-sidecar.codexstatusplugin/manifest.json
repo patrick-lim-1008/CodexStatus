@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "identifier": "com.codexstatus.progress-sidecar",
+  "name": "Progress Sidecar",
+  "version": "1.0.0",
+  "minimumHostVersion": "0.3.0",
+  "author": "CodexStatus",
+  "summary": "Shows concise progress through a temporary /side-style conversation.",
+  "symbolName": "sidebar.right",
+  "kind": "native",
+  "entryPoint": "progress-sidecar",
+  "capabilities": ["readTaskActivity", "createEphemeralSideConversation", "useModelQuota"],
+  "privacyDescription": "Creates an ephemeral, read-only fork of the selected task. The summary stays in CodexStatus and does not enter the source conversation. Each refresh uses account quota."
+}

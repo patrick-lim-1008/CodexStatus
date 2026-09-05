@@ -25,22 +25,27 @@ The included build script works with the standalone Apple Command Line Tools, so
 
 The app has no Dock icon. Look for the colored Codex-shaped mark in the menu bar. Click the gear in its compact popover—or right-click the menu-bar mark and choose **Settings…**—to customize it.
 
-## Settings and built-in extensions
+## Settings and feature layers
 
-Version 0.2 separates the quiet task indicator from optional capabilities:
+CodexStatus separates features by how essential they are and what they affect:
 
-- **Core:** local task detection, five status colors, priority/count display, exact conversation opening, idle folding, and persistent completed-task acknowledgement.
-- **Usage Meter:** displays locally reported rate-limit windows. Enabled by default.
-- **Enhanced Activity:** installs additive user-level Codex lifecycle hooks for more precise approval and failure signals. Disabled by default on a new installation.
-- **macOS Notifications:** announces completion, approval/attention, and failure transitions. Each event has its own switch, sound, and test button, with optional quiet hours. Disabled by default.
+- **Built in · Default on:** local task detection, five status colors, priority/count display, exact conversation opening, idle folding, persistent completed-task acknowledgement, privacy-safe activity labels, and the local Usage Meter.
+- **Built in · Optional:** Enhanced Activity hooks, Codex lifecycle following, macOS Notifications, stable CodexStatus update checks, and System/Light/Dark appearance selection. These ship in the app but remain user-controlled because they install an integration, access the network, change runtime behavior, or interrupt the user.
+- **Plugins:** independently packaged features that use model quota, external data, or reusable content. Plugins can be enabled separately without making the core indicator more complicated.
 
-Appearance settings control project labels, menu-bar counts, multi-state color cycling, and idle folding. General settings control completion acknowledgement and whether CodexStatus follows the Codex app lifecycle.
+Appearance settings control theme, project labels, menu-bar counts, multi-state color cycling, and idle folding. General settings control completion acknowledgement. Lifecycle following is grouped with the other built-in optional features.
+
+Update checks are disabled by default. When enabled, CodexStatus checks the public GitHub `releases/latest` endpoint at launch and every six hours, ignores drafts and prereleases, and shows a small update action only when a newer stable version exists. This checks CodexStatus itself; summaries of changes in the Codex app remain a separate planned plugin.
 
 Existing v0.1 installations retain their enabled hooks, lifecycle behavior, and hover-to-read interaction when upgraded. Fresh installations use click-to-read and do not install hooks or a background watcher unless those options are enabled.
 
-All v0.2 extensions are built into and signed with the app. CodexStatus does not load third-party executable code; a safely isolated external extension format is intentionally deferred.
+Version 0.3.0 includes PluginKit v1. Bundled native plugins are packaged with versioned manifests and signed with the app. The settings window can import, inspect, enable, disable, update, and remove `.codexstatusplugin` resource packs. Imported packages never execute third-party code: executable files, symbolic links, incompatible host versions, and attempts to replace bundled plugins are rejected. The complete package contract is documented in [`Documentation/PLUGIN_SPEC.md`](Documentation/PLUGIN_SPEC.md), with a machine-readable manifest schema beside it. The completed 0.3.0 scope is recorded in [`Documentation/ROADMAP_0.3.md`](Documentation/ROADMAP_0.3.md).
+
+**Progress Sidecar** is the first optional feature implemented through the native plugin runtime. It asks for a concise progress snapshot in an ephemeral read-only fork, similar to a Codex side conversation, without adding a turn to or steering the source task. A small button appears on each task row while the plugin is enabled. Updates can be manual or scheduled every one, three, or five minutes; every update uses Codex model quota, so scheduled updates are off by default. Disabling the plugin terminates its helpers and clears its in-memory summaries.
 
 New Codex activity appears automatically. The app reads the persisted turn lifecycle, so a task remains blue throughout model thinking and tool work instead of guessing from its last-update time. A completed task remains green until it is acknowledged using the selected click or hover behavior; that acknowledgement is persisted across app restarts.
+
+Terminal rollout events take precedence over briefly stale activity flags, and older Hook alerts cannot replace newer task state. If the local Codex connection disappears, CodexStatus tolerates a short transient failure and then folds formerly active tasks into a neutral unavailable state instead of leaving a false blue indicator running indefinitely.
 
 While a task is active, its second line shows a privacy-safe activity category such as thinking, terminal use, file editing, web search, integration use, subtask coordination, image generation, or response writing. CodexStatus never copies prompts, reasoning text, commands, paths, or tool output into this display.
 
@@ -60,7 +65,7 @@ When **Follow Codex lifecycle** is enabled, CodexStatus installs a lightweight u
 
 ## Privacy
 
-CodexStatus runs locally. It reads Codex task metadata and, when enabled, rate-limit information from the local Codex App Server. Enhanced Activity stores only small lifecycle snapshots and completion acknowledgements on your Mac. CodexStatus itself does not upload analytics or user data. The About & Privacy settings include controls to open its data folder and safely remove only the integrations installed by CodexStatus.
+CodexStatus runs locally. It reads Codex task metadata and, when enabled, rate-limit information from the local Codex App Server. Enhanced Activity stores only small lifecycle snapshots and completion acknowledgements on your Mac. CodexStatus does not upload analytics or user data. Optional update checks contact only the public GitHub releases endpoint. The About & Privacy settings include controls to open its data folder and safely remove only the integrations installed by CodexStatus.
 
 ## Status priority
 
