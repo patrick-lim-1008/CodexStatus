@@ -180,8 +180,7 @@ final class StatusNotificationController: NSObject, ObservableObject {
         observedStatuses = currentStatuses
         for task in newestTasks.values.sorted(by: { $0.updatedAt < $1.updatedAt }) {
             guard configuration.allows(task.status),
-                  let previousStatus = previousStatuses[task.id],
-                  previousStatus != task.status
+                  previousStatuses[task.id] != task.status
             else { continue }
 
             guard !configuration.isQuiet(at: Date()) else { continue }

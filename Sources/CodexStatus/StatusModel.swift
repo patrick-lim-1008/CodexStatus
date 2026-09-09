@@ -557,7 +557,9 @@ final class StatusModel: ObservableObject {
                 completionAt = nil
             } else if resolvedState == .needsAttention {
                 status = .needsAttention
-                detail = "Waiting for approval"
+                detail = row.activeFlags.contains("waitingOnUserInput")
+                    ? "Waiting for your input"
+                    : "Waiting for approval"
                 isRecentlyCompleted = false
                 completionAt = nil
             } else if resolvedState == .working {

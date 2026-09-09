@@ -34,6 +34,7 @@ struct AppPreferencesSmoke {
         try testLegacyMigration()
         try testStoredValuesWinOverMigration()
         try testHookRemovalPreservesUnrelatedConfiguration()
+        try testOwnedHookTrustSelection()
         try testCompletionLedgerRecoveryAndPersistence()
         try testProjectIdentityFiltering()
         try testCoreTaskStatePolicy()
@@ -305,6 +306,51 @@ struct AppPreferencesSmoke {
         try expect(!installer.isInstalled, "Enhanced Activity must be removable after reinstall")
     }
 
+    private static func testOwnedHookTrustSelection() throws {
+        let hooksURL = URL(fileURLWithPath: "/Users/test/.codex/hooks.json")
+        let helperURL = URL(fileURLWithPath: "/Users/test/Library/Application Support/CodexStatus/CodexStatusHook")
+        let response: [String: Any] = [
+            "data": [[
+                "hooks": [
+                    [
+                        "key": "/Users/test/.codex/hooks.json:permission_request:0:0",
+                        "sourcePath": hooksURL.path,
+                        "command": "\"\(helperURL.path)\"",
+                        "currentHash": "sha256:owned",
+                        "trustStatus": "untrusted"
+                    ],
+                    [
+                        "key": "/Users/test/.codex/hooks.json:stop:0:0",
+                        "sourcePath": hooksURL.path,
+                        "command": helperURL.path,
+                        "currentHash": "sha256:trusted",
+                        "trustStatus": "trusted"
+                    ],
+                    [
+                        "key": "/Users/test/.codex/hooks.json:permission_request:1:0",
+                        "sourcePath": hooksURL.path,
+                        "command": "/usr/local/bin/unrelated-hook",
+                        "currentHash": "sha256:unrelated",
+                        "trustStatus": "untrusted"
+                    ]
+                ]
+            ]]
+        ]
+
+        let owned = CodexHookTrustManager.ownedHooks(
+            in: response,
+            hooksURL: hooksURL,
+            helperURL: helperURL
+        )
+        try expect(owned.count == 2, "Hook trust must select only CodexStatus-owned handlers")
+        let updates = CodexHookTrustManager.trustUpdates(for: owned)
+        try expect(updates.count == 1, "Hook trust must update only untrusted or modified owned handlers")
+        try expect(
+            (updates["/Users/test/.codex/hooks.json:permission_request:0:0"] as? [String: String])?["trusted_hash"] == "sha256:owned",
+            "Hook trust must persist the exact hash reported by Codex"
+        )
+    }
+
     @MainActor
     private static func testCompletionLedgerRecoveryAndPersistence() throws {
         try withCleanDefaults { defaults in
@@ -373,6 +419,14 @@ struct AppPreferencesSmoke {
                 rolloutLifecycle: "running"
             ) == .needsAttention,
             "A live approval request must remain visible"
+        )
+        try expect(
+            CoreTaskStatePolicy.resolve(
+                statusType: "active",
+                activeFlags: ["waitingOnUserInput"],
+                rolloutLifecycle: "running"
+            ) == .needsAttention,
+            "A live user-input request must use the attention state"
         )
         let current = Date(timeIntervalSince1970: 100)
         try expect(

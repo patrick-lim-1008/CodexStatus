@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Automatically verify and trust only the lifecycle hooks installed by CodexStatus, fixing silent Enhanced Activity failures after Codex introduced persisted hook trust.
+- Treat both approval requests and user-input requests as Needs Attention, and notify when a newly discovered task first appears in that state.
 - Correct version attribution and status details across the README, PluginKit specification, manifest schema, and 0.3 roadmap.
 - Document the release checklist used to keep tags, release notes, downloadable assets, and checksums consistent.
 

@@ -57,6 +57,8 @@ Ordinary idle tasks are grouped into a collapsed row to keep the popover compact
 
 Existing and older tasks are loaded from Codex's supported App Server `thread/list` interface, so they appear without waiting for a new hook event. Lifecycle hooks add approval and failure signals. Click any task row to open that exact conversation in Codex.
 
+When Enhanced Activity is enabled, CodexStatus verifies the current Codex hook-trust records and trusts only the exact handlers it installed; unrelated user or project hooks are never approved. Approval requests and explicit user-input requests enter the orange Needs Attention state. A newly discovered task that first appears in either condition can trigger the configured macOS alert immediately instead of being silently treated as an initial status.
+
 When a task has a real working-directory project context, its row includes a compact folder suffix with the project name. Codex's generated projectless-chat directories are filtered out, and internal `g-p-*` identifiers are never displayed. Opening the row returns to that conversation in its original project context.
 
 The usage indicator reads ChatGPT rate-limit windows from Codex's local App Server. When a 5-hour limit is present, it simultaneously shows a compact weekly ring and a 5-hour bar. Accounts without a 5-hour window automatically use the original single-ring view for the most constrained available window. Its expanded hover target shows only the windows actually returned, including quota reset times and the last data-refresh time. Usage refreshes once per minute and remains optional when the active account does not expose rate limits.

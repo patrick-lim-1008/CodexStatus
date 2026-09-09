@@ -16,7 +16,8 @@ enum CoreTaskStatePolicy {
     ) -> TaskLifecycleResolution {
         if rolloutLifecycle == "completed" { return .completed }
         if rolloutLifecycle == "aborted" { return .aborted }
-        if statusType == "active" && activeFlags.contains("waitingOnApproval") {
+        let attentionFlags = Set(["waitingOnApproval", "waitingOnUserInput"])
+        if statusType == "active" && !attentionFlags.isDisjoint(with: activeFlags) {
             return .needsAttention
         }
         if statusType == "active" || rolloutLifecycle == "running" {

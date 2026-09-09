@@ -27,7 +27,11 @@ case "UserPromptSubmit":
     mapped = ("working", "Thinking")
 case "PreToolUse":
     let tool = object["tool_name"] as? String ?? "tool"
-    mapped = ("working", "Running \(displayName(for: tool))")
+    if requestsUserInput(tool) {
+        mapped = ("needsAttention", "Waiting for your input")
+    } else {
+        mapped = ("working", "Running \(displayName(for: tool))")
+    }
 case "PermissionRequest":
     mapped = ("needsAttention", "Waiting for approval")
 case "PostToolUse":
@@ -70,6 +74,13 @@ func displayName(for tool: String) -> String {
     if tool == "apply_patch" { return "file edit" }
     if tool.hasPrefix("mcp__") { return "integration" }
     return tool.replacingOccurrences(of: "_", with: " ")
+}
+
+func requestsUserInput(_ tool: String) -> Bool {
+    let normalized = tool.lowercased()
+    return normalized == "request_user_input"
+        || normalized.hasSuffix(".request_user_input")
+        || normalized.hasSuffix("__request_user_input")
 }
 
 func containsError(_ value: Any?) -> Bool {
