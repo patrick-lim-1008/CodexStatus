@@ -85,8 +85,16 @@ struct CodexIntegrationInstaller {
         let handler: [String: Any] = ["type": "command", "command": command, "timeout": 2]
         let events = [
             "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
-            "PermissionRequest", "PostToolUse", "SubagentStart", "SubagentStop", "Stop"
+            "PostToolUse", "Stop"
         ]
+
+        // PermissionRequest fires before automatic review decides whether the
+        // user is needed, while subagent events reuse the parent session id.
+        // Migrate only our handlers away while preserving unrelated hooks.
+        for event in ["PermissionRequest", "SubagentStart", "SubagentStop"] {
+            guard let groups = hooks[event] as? [Any] else { continue }
+            hooks[event] = removingManagedHandlers(from: groups)
+        }
 
         for event in events {
             var groups = hooks[event] as? [[String: Any]] ?? []
@@ -190,6 +198,22 @@ struct CodexIntegrationInstaller {
         return trimmedCommand == path
             || trimmedCommand == "\"\(path)\""
             || trimmedCommand == "'\(path)'"
+    }
+
+    private func removingManagedHandlers(from groups: [Any]) -> [Any] {
+        groups.compactMap { value in
+            guard var group = value as? [String: Any],
+                  let handlers = group["hooks"] as? [Any]
+            else { return value }
+
+            let remainingHandlers = handlers.filter { value in
+                guard let handler = value as? [String: Any] else { return true }
+                return !isManagedHandler(handler)
+            }
+            guard !remainingHandlers.isEmpty else { return nil }
+            group["hooks"] = remainingHandlers
+            return group
+        }
     }
 
     private func securelyWriteHooks(_ data: Data) throws {

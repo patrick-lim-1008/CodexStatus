@@ -22,6 +22,7 @@ swiftc \
     Sources/CodexStatus/AppUpdateChecker.swift \
     Sources/CodexStatus/AppPreferences.swift \
     Sources/CodexStatus/CoreStateSupport.swift \
+    Sources/CodexStatusThreadScanner/RolloutThreadIdentity.swift \
     Sources/CodexStatus/CodexIntegrationInstaller.swift \
     Sources/CodexStatus/CodexLifecycleInstaller.swift \
     Sources/CodexStatus/OptionalFeatureSupport.swift \
@@ -142,6 +143,24 @@ FAKE_RATE_LIMIT_PROFILE=weekly-only \
 "$app_dir/Contents/Helpers/CodexStatusThreadScanner" --parse-rollout \
     < "$project_dir/Tests/Fixtures/rollout-activity.jsonl" \
     | "$test_build_dir/AppPreferencesSmoke" --validate-rollout-output
+
+hook_test_dir=$(mktemp -d "$test_build_dir/hook-filter.XXXXXX")
+print -rn -- '{"session_id":"root-session","agent_id":"child-agent","hook_event_name":"PermissionRequest","cwd":"/tmp/Child"}' \
+    | CODEX_STATUS_SESSIONS_DIRECTORY="$hook_test_dir" \
+        "$app_dir/Contents/Helpers/CodexStatusHook" >/dev/null
+[[ ! -e "$hook_test_dir/root-session.json" ]] || { print -u2 "Child-agent hook must not write a root snapshot"; exit 1; }
+
+print -rn -- '{"session_id":"root-session","agent_id":"root-session","hook_event_name":"PermissionRequest","cwd":"/tmp/Root"}' \
+    | CODEX_STATUS_SESSIONS_DIRECTORY="$hook_test_dir" \
+        "$app_dir/Contents/Helpers/CodexStatusHook" >/dev/null
+[[ -e "$hook_test_dir/root-session.json" ]] || { print -u2 "Root hook must still write a snapshot"; exit 1; }
+jq -e '.status == "working"' "$hook_test_dir/root-session.json" >/dev/null
+
+print -rn -- '{"session_id":"other-root","agent_id":"child-agent","hook_event_name":"SubagentStart","cwd":"/tmp/Child"}' \
+    | CODEX_STATUS_SESSIONS_DIRECTORY="$hook_test_dir" \
+        "$app_dir/Contents/Helpers/CodexStatusHook" >/dev/null
+[[ ! -e "$hook_test_dir/other-root.json" ]] || { print -u2 "Subagent lifecycle hook must be ignored"; exit 1; }
+rm -rf "$hook_test_dir"
 
 print -rn -- '{"threadID":"test-thread","prompt":"Give a concise progress update without changing anything."}' \
     | CODEX_CLI_PATH="$project_dir/Tests/Fixtures/fake-codex-app-server.zsh" \

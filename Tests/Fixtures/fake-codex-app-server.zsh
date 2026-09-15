@@ -11,7 +11,12 @@ while IFS= read -r message; do
             print -r -- "{\"id\":$request_id,\"result\":{}}"
             ;;
         thread/list)
-            print -r -- "{\"id\":$request_id,\"result\":{\"data\":[{\"id\":\"test-thread\",\"name\":\"Scanner test\",\"cwd\":\"/tmp/CodexStatusFixture\",\"updatedAt\":1788556800,\"status\":{\"type\":\"active\",\"activeFlags\":[]}}]}}"
+            source_kinds=$(print -r -- "$message" | jq -c '.params.sourceKinds // []')
+            if [[ "$source_kinds" != '["cli","vscode"]' ]]; then
+                print -r -- "{\"id\":$request_id,\"error\":{\"message\":\"thread/list must explicitly filter interactive roots\"}}"
+                continue
+            fi
+            print -r -- "{\"id\":$request_id,\"result\":{\"data\":[{\"id\":\"child-thread\",\"parentThreadId\":\"test-thread\",\"source\":{\"subAgent\":{\"threadSpawn\":{\"parentThreadId\":\"test-thread\"}}},\"name\":\"Child worker\",\"cwd\":\"/tmp/CodexStatusFixture\",\"updatedAt\":1788556900,\"status\":{\"type\":\"active\",\"activeFlags\":[]}},{\"id\":\"ephemeral-sidecar\",\"parentThreadId\":null,\"source\":\"appServer\",\"ephemeral\":true,\"name\":\"Sidecar\",\"cwd\":\"/tmp/CodexStatusFixture\",\"updatedAt\":1788556850,\"status\":{\"type\":\"active\",\"activeFlags\":[]}},{\"id\":\"test-thread\",\"parentThreadId\":null,\"source\":\"vscode\",\"name\":\"Scanner test\",\"cwd\":\"/tmp/CodexStatusFixture\",\"updatedAt\":1788556800,\"status\":{\"type\":\"active\",\"activeFlags\":[]}}]}}"
             ;;
         account/rateLimits/read)
             if [[ "${FAKE_RATE_LIMIT_PROFILE:-dual}" == "weekly-only" ]]; then

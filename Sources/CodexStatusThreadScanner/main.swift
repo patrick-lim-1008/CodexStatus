@@ -58,9 +58,19 @@ private func rolloutStates(for threadIDs: Set<String>) -> [String: RolloutState]
 
     var result: [String: RolloutState] = [:]
     for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-        guard let threadID = threadIDs.first(where: { url.lastPathComponent.contains($0) }),
+        guard threadIDs.contains(where: { url.lastPathComponent.contains($0) }),
+              let headerHandle = try? FileHandle(forReadingFrom: url)
+        else { continue }
+        let header = try? headerHandle.read(upToCount: 64 * 1024)
+        try? headerHandle.close()
+        guard let header,
+              let threadID = RolloutThreadIdentity.owner(in: header),
+              threadIDs.contains(threadID),
               let state = latestRolloutState(in: url)
         else { continue }
+        if let existing = result[threadID], existing.updatedAt > state.updatedAt {
+            continue
+        }
         result[threadID] = state
     }
     return result
@@ -204,6 +214,37 @@ private func sanitizedToolActivity(_ name: String) -> String {
     return "Using a tool"
 }
 
+/// Only surface conversations a person opened directly. App Server normally
+/// applies this filter itself, but keeping a defensive client-side check avoids
+/// exposing spawned workers when older or future servers return a broader set.
+private func isUserFacingRootThread(_ row: [String: Any]) -> Bool {
+    if let parentThreadID = row["parentThreadId"] as? String, !parentThreadID.isEmpty {
+        return false
+    }
+    if row["ephemeral"] as? Bool == true {
+        return false
+    }
+
+    if let source = row["source"] as? [String: Any],
+       source.keys.contains(where: { $0.lowercased() == "subagent" }) {
+        return false
+    }
+    if let source = row["source"] as? String {
+        let allowedSources = ["cli", "vscode", "unknown"]
+        if !allowedSources.contains(source.lowercased()) {
+            return false
+        }
+    }
+
+    if let threadSource = row["threadSource"] as? String {
+        let normalized = threadSource.lowercased()
+        if normalized.contains("subagent") || normalized.contains("guardian") {
+            return false
+        }
+    }
+    return true
+}
+
 if CommandLine.arguments.contains("--parse-rollout") {
     let inputData = FileHandle.standardInput.readDataToEndOfFile()
     if let state = rolloutState(in: inputData),
@@ -317,7 +358,7 @@ output.fileHandleForReading.readabilityHandler = { handle in
         if messageID == 1,
            let result = message["result"] as? [String: Any],
            let rows = result["data"] as? [[String: Any]] {
-            let recentRows = Array(rows.prefix(12))
+            let recentRows = Array(rows.filter(isUserFacingRootThread).prefix(12))
             let states = rolloutStates(for: Set(recentRows.compactMap { $0["id"] as? String }))
             summaries = recentRows.compactMap { row in
                 guard let id = row["id"] as? String else { return nil }
@@ -358,7 +399,11 @@ do {
             "clientInfo": ["name": "codex_status", "title": "CodexStatus", "version": "0.3.2"]
         ]],
         ["method": "initialized", "params": [:]],
-        ["method": "thread/list", "id": 1, "params": ["limit": 20, "sortKey": "updated_at"]]
+        ["method": "thread/list", "id": 1, "params": [
+            "limit": 20,
+            "sortKey": "updated_at",
+            "sourceKinds": ["cli", "vscode"]
+        ]]
     ] as [[String: Any]]
     if includeUsage {
         messages.append(["method": "account/rateLimits/read", "id": 2])

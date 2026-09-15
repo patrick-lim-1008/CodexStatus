@@ -26,12 +26,44 @@ enum CoreTaskStatePolicy {
         return .idle
     }
 
-    static func shouldUseHookSignal(
-        isAttentionOrError: Bool,
+    static func shouldUseHookErrorSignal(
+        isError: Bool,
         hookUpdatedAt: Date,
         discoveredUpdatedAt: Date
     ) -> Bool {
-        isAttentionOrError && hookUpdatedAt >= discoveredUpdatedAt
+        isError && hookUpdatedAt >= discoveredUpdatedAt
+    }
+}
+
+/// Private desktop state is a read-only, version-checked fallback. Never merge
+/// accounts or remote hosts: an ambiguous structure means the read state is unknown.
+struct CodexCompletionReadState {
+    private let unreadThreadIDs: Set<String>
+
+    init?(globalState: [String: Any]) {
+        guard let state = globalState["electron-thread-read-state-v1"] as? [String: Any],
+              state["version"] as? Int == 1,
+              let identities = state["unreadByIdentity"] as? [String: Any],
+              identities.count == 1,
+              let hosts = identities.values.first as? [String: Any]
+        else { return nil }
+        let localHosts = hosts.filter { $0.key.hasPrefix("local:") }
+        guard localHosts.count == 1,
+              let unread = localHosts.values.first as? [String]
+        else { return nil }
+        unreadThreadIDs = Set(unread)
+    }
+
+    func confirmsRead(
+        threadID: String,
+        completedAt: Date,
+        stateUpdatedAt: Date,
+        now: Date
+    ) -> Bool {
+        // Give the desktop time to publish its unread update after completion.
+        !unreadThreadIDs.contains(threadID)
+            && stateUpdatedAt >= completedAt
+            && now.timeIntervalSince(completedAt) >= 3
     }
 }
 

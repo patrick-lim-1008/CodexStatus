@@ -126,6 +126,8 @@ final class StatusModel: ObservableObject {
     private var lastSuccessfulThreadScanAt: Date?
     private var lastUsageScan: Date?
     private var completionLedger: CompletionLedger
+    private var codexReadState: CodexCompletionReadState?
+    private var codexReadStateUpdatedAt: Date?
     private var preferenceObservers = Set<AnyCancellable>()
 
     init(preferences: AppPreferences, pluginRegistry: PluginRegistry) {
@@ -240,6 +242,7 @@ final class StatusModel: ObservableObject {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let now = Date()
+        synchronizeCodexReadState(now: now)
         let urls: [URL]
         if preferences.enhancedActivityEnabled {
             urls = (try? FileManager.default.contentsOfDirectory(
@@ -264,6 +267,12 @@ final class StatusModel: ObservableObject {
             var detail = snapshot.detail
             var isRecentlyCompleted = false
             var completionAt: Date?
+            // Older builds persisted PermissionRequest as an immediate approval
+            // alert. Those snapshots predate automatic-review confirmation and
+            // must not flash orange while the first App Server scan is starting.
+            if status == .needsAttention && detail == "Waiting for approval" {
+                return nil
+            }
             if status == .done {
                 completionAt = snapshot.updatedAt
                 isRecentlyCompleted = true
@@ -319,15 +328,25 @@ final class StatusModel: ObservableObject {
         }
         for task in hookTasks {
             guard let discovered = merged[task.id] else {
-                merged[task.id] = task
+                // Before App Server has ever connected, hooks remain a useful
+                // fallback. Once discovery succeeds, only enrich confirmed root
+                // conversations so orphaned child-agent snapshots cannot appear
+                // as extra rows in the menu.
+                if lastSuccessfulThreadScanAt == nil {
+                    merged[task.id] = task
+                }
                 continue
             }
             // The rollout lifecycle is authoritative for Working/Done/Idle. Hooks
-            // provide richer approval and failure signals only when that signal is
-            // at least as new as the App Server row. This prevents an old Stopped
-            // hook from replacing a later successful or running turn.
-            let isFreshHookSignal = CoreTaskStatePolicy.shouldUseHookSignal(
-                isAttentionOrError: task.status == .needsAttention || task.status == .error,
+            // provide a richer failure signal only when it is at least as new as
+            // the App Server row. This prevents an old Stopped hook from replacing
+            // a later successful or running turn.
+            // A PermissionRequest hook fires before Codex's automatic Guardian
+            // has decided whether the user is needed. Only App Server's final
+            // waiting state may promote a task to Needs Attention; hooks remain
+            // useful for errors.
+            let isFreshHookSignal = CoreTaskStatePolicy.shouldUseHookErrorSignal(
+                isError: task.status == .error,
                 hookUpdatedAt: task.updatedAt,
                 discoveredUpdatedAt: discovered.updatedAt
             )
@@ -602,6 +621,35 @@ final class StatusModel: ObservableObject {
 
     private func isUnacknowledgedCompletion(taskID: String, completedAt: Date) -> Bool {
         completionLedger.isUnacknowledged(taskID: taskID, completedAt: completedAt)
+    }
+
+    private func synchronizeCodexReadState(now: Date) {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/.codex-global-state.json")
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let modifiedAt = attributes[.modificationDate] as? Date
+        else { return }
+        if modifiedAt != codexReadStateUpdatedAt {
+            codexReadStateUpdatedAt = modifiedAt
+            codexReadState = (try? Data(contentsOf: url))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                .flatMap { CodexCompletionReadState(globalState: $0) }
+        }
+        guard let readState = codexReadState else { return }
+        for index in discoveredTasks.indices {
+            let task = discoveredTasks[index]
+            guard task.status == .done, let completedAt = task.completionAt,
+                  readState.confirmsRead(
+                    threadID: task.id,
+                    completedAt: completedAt,
+                    stateUpdatedAt: modifiedAt,
+                    now: now
+                  )
+            else { continue }
+            completionLedger.acknowledge(taskID: task.id, completedAt: completedAt)
+            discoveredTasks[index].status = .idle
+            discoveredTasks[index].detail = "Completed · viewed"
+        }
     }
 
     func acknowledgeCompletion(for threadID: String) {

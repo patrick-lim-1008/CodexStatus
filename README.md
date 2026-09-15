@@ -55,7 +55,7 @@ While a task is active, its second line shows a privacy-safe activity category s
 
 Ordinary idle tasks are grouped into a collapsed row to keep the popover compact. Unread completed tasks remain visible until acknowledged, then join the idle group. The idle row can be expanded whenever older tasks are needed.
 
-Existing and older tasks are loaded from Codex's supported App Server `thread/list` interface, so they appear without waiting for a new hook event. Lifecycle hooks add approval and failure signals. Click any task row to open that exact conversation in Codex.
+Existing and older tasks are loaded from Codex's supported App Server `thread/list` interface, so they appear without waiting for a new hook event. The App Server's final waiting state drives approval alerts, while lifecycle hooks add failure signals. Click any task row to open that exact conversation in Codex.
 
 When Enhanced Activity is enabled, CodexStatus verifies the current Codex hook-trust records and trusts only the exact handlers it installed; unrelated user or project hooks are never approved. Approval requests and explicit user-input requests enter the orange Needs Attention state. A newly discovered task that first appears in either condition can trigger the configured macOS alert immediately instead of being silently treated as an initial status.
 
@@ -65,7 +65,7 @@ The usage indicator reads ChatGPT rate-limit windows from Codex's local App Serv
 
 The compact 224-point header reads `Codex · activity · refresh` on the left. Clicking the Codex identity and summary brings the Codex app to the foreground; refresh remains an independent control. Its far-right usage group reads `reset date · ring`; hovering it opens a persistent in-menu detail card with the quota, full reset timestamp, and data-refresh time. Conversation titles form a flexible left-aligned region that takes all remaining row width. Project suffixes stay right-aligned and grow only up to 116 points. No generic project icon is shown because Codex's thread metadata does not expose each project's configured icon. Long project names keep both their beginning and ending through middle truncation and reveal the complete untruncated name on hover. Redundant row status labels and disclosure chevrons are omitted. It has no footer.
 
-A completed task remains green until it is seen. It becomes a neutral `Completed · viewed` row, remains visible, and the acknowledgement is persisted. New installations mark it read when the task is clicked; upgraded users retain the original hover-to-read behavior, and either mode can be selected in Settings.
+A completed task remains green until it is seen. It becomes a neutral `Completed · viewed` row, remains visible, and the acknowledgement is persisted. New installations mark it read when the task is clicked; upgraded users retain the original hover-to-read behavior, and either mode can be selected in Settings. Opening a completed task in Codex also acknowledges it through the desktop's version-checked local read state; missing, stale, or ambiguous account/host data is never treated as read.
 
 When **Follow Codex lifecycle** is enabled, CodexStatus installs a lightweight user LaunchAgent watcher. The watcher has no UI and only observes whether the Codex app bundle is running: it opens CodexStatus when Codex starts and terminates CodexStatus when Codex quits. Disabling the setting removes that watcher.
 

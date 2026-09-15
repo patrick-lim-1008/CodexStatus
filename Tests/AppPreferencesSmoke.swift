@@ -38,6 +38,7 @@ struct AppPreferencesSmoke {
         try testCompletionLedgerRecoveryAndPersistence()
         try testProjectIdentityFiltering()
         try testCoreTaskStatePolicy()
+        try testRolloutOwnershipAndDesktopReadState()
         try testUpdateReleaseParsing()
         try testLifecycleInstallerRoundTrip()
         try testQuietHoursPolicy()
@@ -49,6 +50,7 @@ struct AppPreferencesSmoke {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               root["connected"] as? Bool == true,
               let threads = root["threads"] as? [[String: Any]],
+              threads.count == 1,
               threads.first?["id"] as? String == "test-thread",
               let usageWindows = root["usageWindows"] as? [[String: Any]],
               usageWindows.count == 2,
@@ -301,7 +303,17 @@ struct AppPreferencesSmoke {
                 }.count
             }
         }
-        try expect(managedHandlerCount == 9, "Enhanced Activity must install one handler per supported lifecycle event")
+        try expect(managedHandlerCount == 6, "Enhanced Activity must install only authoritative root-conversation lifecycle handlers")
+        for event in ["PermissionRequest", "SubagentStart", "SubagentStop"] {
+            let groups = installedHooks[event] as? [[String: Any]] ?? []
+            let containsManagedHandler = groups.contains { group in
+                let handlers = group["hooks"] as? [[String: Any]] ?? []
+                return handlers.contains {
+                    ($0["command"] as? String)?.contains("CodexStatusHook") == true
+                }
+            }
+            try expect(!containsManagedHandler, "Enhanced Activity must remove legacy \(event) handlers")
+        }
         try installer.uninstall()
         try expect(!installer.isInstalled, "Enhanced Activity must be removable after reinstall")
     }
@@ -430,21 +442,55 @@ struct AppPreferencesSmoke {
         )
         let current = Date(timeIntervalSince1970: 100)
         try expect(
-            !CoreTaskStatePolicy.shouldUseHookSignal(
-                isAttentionOrError: true,
+            !CoreTaskStatePolicy.shouldUseHookErrorSignal(
+                isError: true,
                 hookUpdatedAt: current.addingTimeInterval(-1),
                 discoveredUpdatedAt: current
             ),
-            "An old Hook alert must not replace newer task state"
+            "An old Hook error must not replace newer task state"
         )
         try expect(
-            CoreTaskStatePolicy.shouldUseHookSignal(
-                isAttentionOrError: true,
+            CoreTaskStatePolicy.shouldUseHookErrorSignal(
+                isError: true,
                 hookUpdatedAt: current,
                 discoveredUpdatedAt: current
             ),
-            "A current Hook alert must enrich task state"
+            "A current Hook error must enrich task state"
         )
+        try expect(
+            !CoreTaskStatePolicy.shouldUseHookErrorSignal(
+                isError: false,
+                hookUpdatedAt: current,
+                discoveredUpdatedAt: current
+            ),
+            "A PermissionRequest hook must not bypass root-conversation confirmation"
+        )
+    }
+
+    private static func testRolloutOwnershipAndDesktopReadState() throws {
+        let parent = "parent-id"
+        let child = "child-id"
+        let rootHeader = Data("{\"type\":\"session_meta\",\"payload\":{\"id\":\"parent-id\"}}\n{}".utf8)
+        let childHeader = Data("{\"type\":\"session_meta\",\"payload\":{\"id\":\"child-id\"}}".utf8)
+        try expect(RolloutThreadIdentity.owner(in: rootHeader) == parent, "Root and continuation segments must match their declared session ID")
+        try expect(RolloutThreadIdentity.owner(in: childHeader) == child, "Child ownership must come from metadata, never the parent ID in its filename")
+        try expect(RolloutThreadIdentity.owner(in: Data("{}".utf8)) == nil, "Missing session metadata must not guess ownership")
+
+        let state: [String: Any] = ["electron-thread-read-state-v1": [
+            "version": 1,
+            "unreadByIdentity": ["account": ["local:host": ["unread-thread"], "remote:host": ["viewed-thread"]]]
+        ]]
+        guard let parsed = CodexCompletionReadState(globalState: state) else {
+            throw TestFailure("Valid local desktop read state must parse")
+        }
+        let completed = Date(timeIntervalSince1970: 100)
+        try expect(parsed.confirmsRead(threadID: "viewed-thread", completedAt: completed, stateUpdatedAt: completed, now: completed.addingTimeInterval(4)), "A viewed local task must be acknowledged independently of remote state")
+        try expect(!parsed.confirmsRead(threadID: "unread-thread", completedAt: completed, stateUpdatedAt: completed, now: completed.addingTimeInterval(4)), "An unread task must remain unread")
+        try expect(!parsed.confirmsRead(threadID: "viewed-thread", completedAt: completed, stateUpdatedAt: completed.addingTimeInterval(-1), now: completed.addingTimeInterval(4)), "Stale desktop state must not acknowledge a new completion")
+        try expect(!parsed.confirmsRead(threadID: "viewed-thread", completedAt: completed, stateUpdatedAt: completed, now: completed.addingTimeInterval(1)), "Completion publishing race must not mark a task read")
+        try expect(CodexCompletionReadState(globalState: [:]) == nil, "Missing state must remain unknown")
+        let ambiguous: [String: Any] = ["electron-thread-read-state-v1": ["version": 1, "unreadByIdentity": ["one": ["local:host": []], "two": ["local:host": []]]]]
+        try expect(CodexCompletionReadState(globalState: ambiguous) == nil, "Multiple accounts must never be merged")
     }
 
     private static func testUpdateReleaseParsing() throws {

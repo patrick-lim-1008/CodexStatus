@@ -8,11 +8,39 @@ struct Snapshot: Codable {
     let updatedAt: Date
 }
 
+func shouldIgnoreSubagentHook(
+    _ object: [String: Any],
+    event: String,
+    sessionID: String
+) -> Bool {
+    if event == "SubagentStart" || event == "SubagentStop" {
+        return true
+    }
+
+    if let agentType = object["agent_type"] as? String,
+       agentType.lowercased().contains("guardian") {
+        return true
+    }
+
+    // Hooks fired inside a child agent reuse the parent's session_id. The
+    // distinct agent_id is therefore required to stop child tool activity from
+    // overwriting the status of the conversation the user actually opened.
+    guard let agentID = object["agent_id"] as? String,
+          !agentID.isEmpty
+    else { return false }
+    return agentID != sessionID
+}
+
 let inputData = FileHandle.standardInput.readDataToEndOfFile()
 guard let object = try? JSONSerialization.jsonObject(with: inputData) as? [String: Any],
       let sessionID = object["session_id"] as? String,
       let event = object["hook_event_name"] as? String
 else {
+    FileHandle.standardOutput.write(Data("{}\n".utf8))
+    exit(0)
+}
+
+if shouldIgnoreSubagentHook(object, event: event, sessionID: sessionID) {
     FileHandle.standardOutput.write(Data("{}\n".utf8))
     exit(0)
 }
@@ -33,7 +61,7 @@ case "PreToolUse":
         mapped = ("working", "Running \(displayName(for: tool))")
     }
 case "PermissionRequest":
-    mapped = ("needsAttention", "Waiting for approval")
+    mapped = ("working", "Reviewing permission request")
 case "PostToolUse":
     mapped = containsError(object["tool_response"])
         ? ("error", "A tool reported an error")
@@ -42,19 +70,16 @@ case "Stop":
     mapped = ("done", "Finished just now")
 case "SessionEnd":
     mapped = ("idle", "Session closed")
-case "SubagentStart":
-    let agent = object["agent_type"] as? String ?? "subagent"
-    mapped = ("working", "Running \(agent) subagent")
-case "SubagentStop":
-    mapped = ("working", "Subagent finished")
 default:
     mapped = ("idle", "Session opened")
 }
 
 let snapshot = Snapshot(id: sessionID, name: name, detail: mapped.detail, status: mapped.status, updatedAt: Date())
 let fileManager = FileManager.default
-let sessionsDirectory = fileManager.homeDirectoryForCurrentUser
-    .appendingPathComponent("Library/Application Support/CodexStatus/sessions", isDirectory: true)
+let sessionsDirectory = ProcessInfo.processInfo.environment["CODEX_STATUS_SESSIONS_DIRECTORY"]
+    .map { URL(fileURLWithPath: $0, isDirectory: true) }
+    ?? fileManager.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/CodexStatus/sessions", isDirectory: true)
 try? fileManager.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
 
 let safeID = sessionID.map { character -> Character in
