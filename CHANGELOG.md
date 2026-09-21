@@ -2,12 +2,15 @@
 
 ## Unreleased
 
-- Match rollout ownership by session metadata and use the latest lifecycle across continuation segments so an older stopped segment cannot turn a running task red.
+- Keep background App Server reads fast with state-database-only thread listing and a tolerant timeout, preventing large histories from forcing false Hook-only fallback states.
+- Treat Hooks as low-latency Working and Needs Attention signals only; confirm Done and Error from the persisted task lifecycle or App Server.
+- Map `PermissionRequest` to Needs Attention, keep recoverable tool failures in Working, and treat Stop/Interrupt as neutral until the authoritative lifecycle arrives.
+- Match rollout ownership by session metadata and use the latest lifecycle across continuation segments so an older stopped segment cannot override a running task.
 - Synchronize completed-task acknowledgements with Codex desktop's local read state, keeping ambiguous account/host data and stale snapshots from marking tasks read.
 - Automatically verify and trust only the lifecycle hooks installed by CodexStatus, fixing silent Enhanced Activity failures after Codex introduced persisted hook trust.
 - Treat both approval requests and user-input requests as Needs Attention, and notify when a newly discovered task first appears in that state.
 - Exclude spawned subagents, guardian reviews, and ephemeral helper conversations from the task list, and prevent child-agent hooks from overwriting their parent conversation's status.
-- Suppress premature approval-hook alerts during automatic reviews, and surface Needs Attention only when the root conversation itself reports that it remains blocked on the user.
+- Ignore terminal Done/Error snapshots written by older Hook helpers so stale local files cannot create false green or red indicators.
 - Correct version attribution and status details across the README, PluginKit specification, manifest schema, and 0.3 roadmap.
 - Document the release checklist used to keep tags, release notes, downloadable assets, and checksums consistent.
 

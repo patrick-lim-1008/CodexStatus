@@ -6,6 +6,7 @@ enum TaskLifecycleResolution: Equatable {
     case needsAttention
     case completed
     case aborted
+    case failed
 }
 
 enum CoreTaskStatePolicy {
@@ -16,6 +17,7 @@ enum CoreTaskStatePolicy {
     ) -> TaskLifecycleResolution {
         if rolloutLifecycle == "completed" { return .completed }
         if rolloutLifecycle == "aborted" { return .aborted }
+        if statusType == "systemError" { return .failed }
         let attentionFlags = Set(["waitingOnApproval", "waitingOnUserInput"])
         if statusType == "active" && !attentionFlags.isDisjoint(with: activeFlags) {
             return .needsAttention
@@ -26,12 +28,12 @@ enum CoreTaskStatePolicy {
         return .idle
     }
 
-    static func shouldUseHookErrorSignal(
-        isError: Bool,
+    static func shouldUseHookLiveSignal(
+        isLiveState: Bool,
         hookUpdatedAt: Date,
         discoveredUpdatedAt: Date
     ) -> Bool {
-        isError && hookUpdatedAt >= discoveredUpdatedAt
+        isLiveState && hookUpdatedAt >= discoveredUpdatedAt
     }
 }
 

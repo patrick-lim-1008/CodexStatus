@@ -1,6 +1,7 @@
 import Foundation
 
 struct Snapshot: Codable {
+    let schemaVersion: Int
     let id: String
     let name: String
     let detail: String
@@ -61,20 +62,33 @@ case "PreToolUse":
         mapped = ("working", "Running \(displayName(for: tool))")
     }
 case "PermissionRequest":
-    mapped = ("working", "Reviewing permission request")
+    mapped = ("needsAttention", "Waiting for approval")
 case "PostToolUse":
-    mapped = containsError(object["tool_response"])
-        ? ("error", "A tool reported an error")
-        : ("working", "Processing the tool result")
+    // A failed command/tool is recoverable and does not mean the whole Codex
+    // task failed. The next lifecycle state remains authoritative.
+    mapped = ("working", containsError(object["tool_response"])
+        ? "Continuing after a tool error"
+        : "Processing the tool result")
 case "Stop":
-    mapped = ("done", "Finished just now")
+    // Stop fires when a turn is about to end and can still be continued by a
+    // Stop hook. Rollout task_complete is the authoritative Done signal.
+    mapped = ("idle", "Turn ended · verifying completion")
+case "Interrupt":
+    mapped = ("idle", "Interrupted")
 case "SessionEnd":
     mapped = ("idle", "Session closed")
 default:
     mapped = ("idle", "Session opened")
 }
 
-let snapshot = Snapshot(id: sessionID, name: name, detail: mapped.detail, status: mapped.status, updatedAt: Date())
+let snapshot = Snapshot(
+    schemaVersion: 2,
+    id: sessionID,
+    name: name,
+    detail: mapped.detail,
+    status: mapped.status,
+    updatedAt: Date()
+)
 let fileManager = FileManager.default
 let sessionsDirectory = ProcessInfo.processInfo.environment["CODEX_STATUS_SESSIONS_DIRECTORY"]
     .map { URL(fileURLWithPath: $0, isDirectory: true) }

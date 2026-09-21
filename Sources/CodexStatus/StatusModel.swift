@@ -62,6 +62,7 @@ struct AgentTask: Identifiable, Equatable {
 }
 
 private struct CodexSnapshot: Decodable {
+    let schemaVersion: Int?
     let id: String
     let name: String
     let detail: String
@@ -99,8 +100,6 @@ private struct ScanResult: Decodable {
 
 @MainActor
 final class StatusModel: ObservableObject {
-    /// Keep a stopped task noticeable, without leaving it as a permanent error.
-    private static let stoppedStatusLifetime: TimeInterval = 5 * 60
     /// Avoid flickering on one failed poll, but never leave a stale active task
     /// blue indefinitely after Codex closes or its App Server becomes unavailable.
     private static let discoveryFreshnessLifetime: TimeInterval = 30
@@ -265,28 +264,24 @@ final class StatusModel: ObservableObject {
 
             var status = AgentStatus(snapshotValue: snapshot.status)
             var detail = snapshot.detail
-            var isRecentlyCompleted = false
-            var completionAt: Date?
-            // Older builds persisted PermissionRequest as an immediate approval
-            // alert. Those snapshots predate automatic-review confirmation and
-            // must not flash orange while the first App Server scan is starting.
-            if status == .needsAttention && detail == "Waiting for approval" {
+            let isRecentlyCompleted = false
+            let completionAt: Date? = nil
+            // Terminal states are never authoritative when they came from a
+            // Hook. Older helpers emitted both of these and could leave a false
+            // green/red indicator behind after App Server polling slowed down.
+            if status == .done || status == .error {
                 return nil
             }
-            if status == .done {
-                completionAt = snapshot.updatedAt
-                isRecentlyCompleted = true
-                if !isUnacknowledgedCompletion(taskID: snapshot.id, completedAt: snapshot.updatedAt) {
-                    status = .idle
-                    detail = "Completed · viewed"
-                    isRecentlyCompleted = true
-                }
-            } else if status == .working && age > 2 * 60 * 60 {
+            // Version 1 approval snapshots used older pre-review semantics.
+            // Only the current helper's explicit approval request is live.
+            if status == .needsAttention,
+               detail == "Waiting for approval",
+               (snapshot.schemaVersion ?? 1) < 2 {
+                return nil
+            }
+            if status == .working && age > 2 * 60 * 60 {
                 status = .idle
                 detail = "No recent activity"
-            } else if status == .error && age > Self.stoppedStatusLifetime {
-                status = .idle
-                detail = "Stopped earlier"
             }
             if status == .idle && age > 30 * 60 { return nil }
 
@@ -337,16 +332,20 @@ final class StatusModel: ObservableObject {
                 }
                 continue
             }
-            // The rollout lifecycle is authoritative for Working/Done/Idle. Hooks
-            // provide a richer failure signal only when it is at least as new as
-            // the App Server row. This prevents an old Stopped hook from replacing
-            // a later successful or running turn.
-            // A PermissionRequest hook fires before Codex's automatic Guardian
-            // has decided whether the user is needed. Only App Server's final
-            // waiting state may promote a task to Needs Attention; hooks remain
-            // useful for errors.
-            let isFreshHookSignal = CoreTaskStatePolicy.shouldUseHookErrorSignal(
-                isError: task.status == .error,
+            // A confirmed terminal lifecycle always wins, including a viewed
+            // completion represented as a neutral row.
+            if discovered.status == .done
+                || discovered.status == .error
+                || discovered.isRecentlyCompleted {
+                continue
+            }
+            // Hooks provide low-latency live activity for confirmed root
+            // conversations. Terminal Done/Error states remain authoritative
+            // App Server/rollout results and can never be invented by a Hook.
+            let isFreshHookSignal = CoreTaskStatePolicy.shouldUseHookLiveSignal(
+                isLiveState: task.status == .working
+                    || task.status == .needsAttention
+                    || task.status == .idle,
                 hookUpdatedAt: task.updatedAt,
                 discoveredUpdatedAt: discovered.updatedAt
             )
@@ -560,18 +559,14 @@ final class StatusModel: ObservableObject {
                     detail = "Completed · viewed"
                     isRecentlyCompleted = true
                 }
+            } else if resolvedState == .failed {
+                status = .error
+                detail = "Codex reported an error"
+                isRecentlyCompleted = false
+                completionAt = nil
             } else if resolvedState == .aborted {
-                let stoppedAt = Date(timeIntervalSince1970: row.lifecycleUpdatedAt)
-                let stoppedAge = row.lifecycleUpdatedAt > 0
-                    ? max(0, now.timeIntervalSince(stoppedAt))
-                    : age
-                if stoppedAge <= Self.stoppedStatusLifetime {
-                    status = .error
-                    detail = "Stopped before completion"
-                } else {
-                    status = .idle
-                    detail = "Stopped earlier"
-                }
+                status = .idle
+                detail = "Stopped"
                 isRecentlyCompleted = false
                 completionAt = nil
             } else if resolvedState == .needsAttention {

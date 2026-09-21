@@ -303,8 +303,8 @@ struct AppPreferencesSmoke {
                 }.count
             }
         }
-        try expect(managedHandlerCount == 6, "Enhanced Activity must install only authoritative root-conversation lifecycle handlers")
-        for event in ["PermissionRequest", "SubagentStart", "SubagentStop"] {
+        try expect(managedHandlerCount == 8, "Enhanced Activity must install live root-conversation handlers without subagent lifecycle handlers")
+        for event in ["SubagentStart", "SubagentStop"] {
             let groups = installedHooks[event] as? [[String: Any]] ?? []
             let containsManagedHandler = groups.contains { group in
                 let handlers = group["hooks"] as? [[String: Any]] ?? []
@@ -442,28 +442,36 @@ struct AppPreferencesSmoke {
         )
         let current = Date(timeIntervalSince1970: 100)
         try expect(
-            !CoreTaskStatePolicy.shouldUseHookErrorSignal(
-                isError: true,
+            !CoreTaskStatePolicy.shouldUseHookLiveSignal(
+                isLiveState: true,
                 hookUpdatedAt: current.addingTimeInterval(-1),
                 discoveredUpdatedAt: current
             ),
-            "An old Hook error must not replace newer task state"
+            "An old Hook state must not replace newer task state"
         )
         try expect(
-            CoreTaskStatePolicy.shouldUseHookErrorSignal(
-                isError: true,
+            CoreTaskStatePolicy.shouldUseHookLiveSignal(
+                isLiveState: true,
                 hookUpdatedAt: current,
                 discoveredUpdatedAt: current
             ),
-            "A current Hook error must enrich task state"
+            "A current approval Hook must enrich a confirmed root task"
         )
         try expect(
-            !CoreTaskStatePolicy.shouldUseHookErrorSignal(
-                isError: false,
+            !CoreTaskStatePolicy.shouldUseHookLiveSignal(
+                isLiveState: false,
                 hookUpdatedAt: current,
                 discoveredUpdatedAt: current
             ),
-            "A PermissionRequest hook must not bypass root-conversation confirmation"
+            "A Hook must never invent a task-level failure"
+        )
+        try expect(
+            CoreTaskStatePolicy.resolve(
+                statusType: "systemError",
+                activeFlags: [],
+                rolloutLifecycle: "running"
+            ) == .failed,
+            "App Server systemError must remain a task-level failure"
         )
     }
 

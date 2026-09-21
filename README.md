@@ -55,7 +55,7 @@ While a task is active, its second line shows a privacy-safe activity category s
 
 Ordinary idle tasks are grouped into a collapsed row to keep the popover compact. Unread completed tasks remain visible until acknowledged, then join the idle group. The idle row can be expanded whenever older tasks are needed.
 
-Existing and older tasks are loaded from Codex's supported App Server `thread/list` interface, so they appear without waiting for a new hook event. The App Server's final waiting state drives approval alerts, while lifecycle hooks add failure signals. Click any task row to open that exact conversation in Codex.
+Existing and older tasks are loaded from Codex's supported App Server `thread/list` interface, so they appear without waiting for a new hook event. Permission and explicit-input hooks provide low-latency Needs Attention signals for confirmed root conversations, while terminal Done and Error states come only from the persisted task lifecycle or App Server. Click any task row to open that exact conversation in Codex.
 
 When Enhanced Activity is enabled, CodexStatus verifies the current Codex hook-trust records and trusts only the exact handlers it installed; unrelated user or project hooks are never approved. Approval requests and explicit user-input requests enter the orange Needs Attention state. A newly discovered task that first appears in either condition can trigger the configured macOS alert immediately instead of being silently treated as an initial status.
 
@@ -81,7 +81,7 @@ CodexStatus runs locally. It reads Codex task metadata and, when enabled, rate-l
 
 The menu bar number appears only when more than one task shares the highest-priority status.
 
-A stopped task remains red for five minutes, then becomes a folded idle entry unless Codex reports new activity.
+A stopped or interrupted task returns to a neutral folded state. Red is reserved for a task-level error reported by Codex, not a recoverable tool failure or user cancellation.
 
 When two or more active statuses coexist, the menu-bar mark cycles through each active status color and its count every 1.3 seconds. Read completion rows are neutral and do not join the cycle.
 

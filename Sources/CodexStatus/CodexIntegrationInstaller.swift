@@ -85,13 +85,12 @@ struct CodexIntegrationInstaller {
         let handler: [String: Any] = ["type": "command", "command": command, "timeout": 2]
         let events = [
             "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
-            "PostToolUse", "Stop"
+            "PermissionRequest", "PostToolUse", "Stop", "Interrupt"
         ]
 
-        // PermissionRequest fires before automatic review decides whether the
-        // user is needed, while subagent events reuse the parent session id.
-        // Migrate only our handlers away while preserving unrelated hooks.
-        for event in ["PermissionRequest", "SubagentStart", "SubagentStop"] {
+        // Subagent lifecycle events reuse the parent session id. Migrate only
+        // our legacy handlers away while preserving unrelated hooks.
+        for event in ["SubagentStart", "SubagentStop"] {
             guard let groups = hooks[event] as? [Any] else { continue }
             hooks[event] = removingManagedHandlers(from: groups)
         }

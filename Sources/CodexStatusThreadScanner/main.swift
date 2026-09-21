@@ -402,7 +402,11 @@ do {
         ["method": "thread/list", "id": 1, "params": [
             "limit": 20,
             "sortKey": "updated_at",
-            "sourceKinds": ["cli", "vscode"]
+            "sourceKinds": ["cli", "vscode"],
+            // A background status read must not rescan and repair every JSONL
+            // transcript. On long-lived installations that can take tens of
+            // seconds and make the menu app incorrectly fall back to Hooks.
+            "useStateDbOnly": true
         ]]
     ] as [[String: Any]]
     if includeUsage {
@@ -415,7 +419,7 @@ do {
         input.fileHandleForWriting.write(Data("\n".utf8))
     }
 
-    _ = semaphore.wait(timeout: .now() + 6)
+    _ = semaphore.wait(timeout: .now() + 12)
 } catch {
     summaries = []
 }

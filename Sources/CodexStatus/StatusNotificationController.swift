@@ -323,7 +323,7 @@ final class StatusNotificationController: NSObject, ObservableObject {
             content.body = "An authorization or input request will use this alert."
         case .error:
             content.title = "Test · Codex task failed"
-            content.body = "A failed or aborted task will use this alert."
+            content.body = "A task-level Codex failure will use this alert."
         case .idle, .working:
             return
         }

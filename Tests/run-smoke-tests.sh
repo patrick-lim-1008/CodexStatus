@@ -154,7 +154,17 @@ print -rn -- '{"session_id":"root-session","agent_id":"root-session","hook_event
     | CODEX_STATUS_SESSIONS_DIRECTORY="$hook_test_dir" \
         "$app_dir/Contents/Helpers/CodexStatusHook" >/dev/null
 [[ -e "$hook_test_dir/root-session.json" ]] || { print -u2 "Root hook must still write a snapshot"; exit 1; }
-jq -e '.status == "working"' "$hook_test_dir/root-session.json" >/dev/null
+jq -e '.status == "needsAttention"' "$hook_test_dir/root-session.json" >/dev/null
+
+print -rn -- '{"session_id":"stop-test","hook_event_name":"Stop","cwd":"/tmp/Root"}' \
+    | CODEX_STATUS_SESSIONS_DIRECTORY="$hook_test_dir" \
+        "$app_dir/Contents/Helpers/CodexStatusHook" >/dev/null
+jq -e '.status == "idle"' "$hook_test_dir/stop-test.json" >/dev/null
+
+print -rn -- '{"session_id":"tool-test","hook_event_name":"PostToolUse","cwd":"/tmp/Root","tool_response":{"exit_code":1}}' \
+    | CODEX_STATUS_SESSIONS_DIRECTORY="$hook_test_dir" \
+        "$app_dir/Contents/Helpers/CodexStatusHook" >/dev/null
+jq -e '.status == "working"' "$hook_test_dir/tool-test.json" >/dev/null
 
 print -rn -- '{"session_id":"other-root","agent_id":"child-agent","hook_event_name":"SubagentStart","cwd":"/tmp/Child"}' \
     | CODEX_STATUS_SESSIONS_DIRECTORY="$hook_test_dir" \
